@@ -1,7 +1,17 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
+import base64
 import os
+import re
+import secrets
+import time
+import uuid
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+import boto3
 import psycopg2
 import psycopg2.extras
 from datetime import datetime, timezone
@@ -36,6 +46,90 @@ token_serializer = URLSafeTimedSerializer(
     os.environ.get("ADMIN_TOKEN_SECRET", "pandu-local-development-secret"),
     salt="admin-auth",
 )
+
+OTP_SMS_BACKEND = os.environ.get("OTP_SMS_BACKEND", "console").strip().lower()
+OTP_EXPIRY_SECONDS = int(os.environ.get("OTP_EXPIRY_SECONDS", "300"))
+OTP_RESEND_SECONDS = int(os.environ.get("OTP_RESEND_SECONDS", "30"))
+OTP_MAX_ATTEMPTS = int(os.environ.get("OTP_MAX_ATTEMPTS", "5"))
+OTP_SECRET = os.environ.get("OTP_SECRET", os.environ.get("ADMIN_TOKEN_SECRET", "pandu-local-development-secret"))
+otp_serializer = URLSafeTimedSerializer(OTP_SECRET, salt="mobile-verification")
+otp_challenges = {}
+otp_last_sent = {}
+RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "").strip()
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "").strip()
+
+
+def normalize_mobile(value):
+    """Return an Indian mobile number in E.164 format, or None when invalid."""
+    digits = re.sub(r"\D", "", str(value or ""))
+    if len(digits) == 12 and digits.startswith("91"):
+        digits = digits[2:]
+    elif len(digits) == 11 and digits.startswith("0"):
+        digits = digits[1:]
+    if not re.fullmatch(r"[6-9]\d{9}", digits):
+        return None
+    return f"+91{digits}"
+
+
+def normalize_address(value):
+    if not isinstance(value, dict):
+        return None
+    door = str(value.get("door", "")).strip()
+    line1 = str(value.get("line1", "")).strip()
+    line2 = str(value.get("line2", "")).strip()
+    city = str(value.get("city", "")).strip()
+    pincode = re.sub(r"\D", "", str(value.get("pincode", "")))
+    if not door or not line1 or not city or not re.fullmatch(r"[1-9]\d{5}", pincode):
+        return None
+    lines = [door, line1]
+    if line2:
+        lines.append(line2)
+    lines.extend([city, pincode])
+    return ", ".join(lines)
+
+
+def otp_digest(challenge_id, code):
+    message = f"{challenge_id}:{code}".encode()
+    return hmac.new(OTP_SECRET.encode(), message, hashlib.sha256).hexdigest()
+
+
+def send_otp_sms(mobile, code):
+    expiry_minutes = max(1, (OTP_EXPIRY_SECONDS + 59) // 60)
+    message = f"Your Pandu verification code is {code}. It expires in {expiry_minutes} minutes. Do not share it."
+    if OTP_SMS_BACKEND == "console":
+        app.logger.warning("Development OTP for %s: %s", mobile, code)
+        return
+    if OTP_SMS_BACKEND == "sns":
+        boto3.client("sns", region_name=os.environ.get("OTP_AWS_REGION", "ap-south-1")).publish(
+            PhoneNumber=mobile,
+            Message=message,
+        )
+        return
+    raise RuntimeError("OTP_SMS_BACKEND must be 'console' or 'sns'.")
+
+
+def razorpay_request(method, path, payload=None):
+    if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
+        raise RuntimeError("Razorpay is not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to .env.")
+    credentials = base64.b64encode(f"{RAZORPAY_KEY_ID}:{RAZORPAY_KEY_SECRET}".encode()).decode()
+    body = json.dumps(payload).encode() if payload is not None else None
+    api_request = Request(
+        f"https://api.razorpay.com/v1{path}",
+        data=body,
+        method=method,
+        headers={"Authorization": f"Basic {credentials}", "Content-Type": "application/json"},
+    )
+    try:
+        with urlopen(api_request, timeout=15) as response:
+            return json.load(response)
+    except HTTPError as error:
+        try:
+            detail = json.load(error).get("error", {}).get("description")
+        except (ValueError, AttributeError):
+            detail = None
+        raise RuntimeError(detail or "Razorpay rejected the payment request.") from error
+    except URLError as error:
+        raise RuntimeError("Could not connect to Razorpay. Please try again.") from error
 
 
 def require_admin(fn):
@@ -120,12 +214,33 @@ def init_db():
             CREATE TABLE IF NOT EXISTS orders (
                 id SERIAL PRIMARY KEY,
                 customer TEXT NOT NULL,
-                email TEXT NOT NULL,
+                email TEXT,
+                mobile TEXT,
                 total INTEGER NOT NULL,
                 items JSONB NOT NULL,
                 created_at TEXT NOT NULL
             );
         """)
+        cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS mobile TEXT;")
+        cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS address TEXT;")
+        cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS razorpay_order_id TEXT;")
+        cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS razorpay_payment_id TEXT;")
+        cur.execute("ALTER TABLE orders ALTER COLUMN email DROP NOT NULL;")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS orders_razorpay_payment_id_idx ON orders(razorpay_payment_id) WHERE razorpay_payment_id IS NOT NULL;")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS payment_sessions (
+                razorpay_order_id TEXT PRIMARY KEY,
+                customer TEXT NOT NULL,
+                email TEXT,
+                mobile TEXT NOT NULL,
+                address TEXT NOT NULL,
+                amount INTEGER NOT NULL,
+                items JSONB NOT NULL,
+                completed BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TEXT NOT NULL
+            );
+        """)
+        cur.execute("ALTER TABLE payment_sessions ALTER COLUMN email DROP NOT NULL;")
         
         conn.commit()
         
@@ -149,6 +264,67 @@ def init_db():
 @app.get("/api/health")
 def health():
     return jsonify({"status": "ok"})
+
+
+@app.post("/api/otp/send")
+def send_otp():
+    mobile = normalize_mobile((request.get_json(silent=True) or {}).get("mobile"))
+    if not mobile:
+        return jsonify({"error": "Enter a valid 10-digit Indian mobile number."}), 400
+
+    now = time.time()
+    retry_after = int(otp_last_sent.get(mobile, 0) + OTP_RESEND_SECONDS - now)
+    if retry_after > 0:
+        return jsonify({"error": f"Please wait {retry_after} seconds before requesting another OTP.", "retry_after": retry_after}), 429
+
+    for key, challenge in list(otp_challenges.items()):
+        if challenge["expires_at"] <= now or challenge["mobile"] == mobile:
+            otp_challenges.pop(key, None)
+
+    challenge_id = str(uuid.uuid4())
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    otp_challenges[challenge_id] = {
+        "mobile": mobile,
+        "digest": otp_digest(challenge_id, code),
+        "expires_at": now + OTP_EXPIRY_SECONDS,
+        "attempts": 0,
+    }
+    try:
+        send_otp_sms(mobile, code)
+    except Exception:
+        otp_challenges.pop(challenge_id, None)
+        app.logger.exception("Could not send OTP")
+        return jsonify({"error": "Could not send the OTP. Please try again."}), 502
+
+    otp_last_sent[mobile] = now
+    response = {"challenge_id": challenge_id, "expires_in": OTP_EXPIRY_SECONDS}
+    if OTP_SMS_BACKEND == "console":
+        response["development_otp"] = code
+    return jsonify(response), 201
+
+
+@app.post("/api/otp/verify")
+def verify_otp():
+    data = request.get_json(silent=True) or {}
+    challenge_id = str(data.get("challenge_id", ""))
+    code = str(data.get("otp", "")).strip()
+    challenge = otp_challenges.get(challenge_id)
+    if not challenge:
+        return jsonify({"error": "This OTP request is invalid. Please request a new code."}), 400
+    if challenge["expires_at"] <= time.time():
+        otp_challenges.pop(challenge_id, None)
+        return jsonify({"error": "This OTP has expired. Please request a new code."}), 400
+    if challenge["attempts"] >= OTP_MAX_ATTEMPTS:
+        otp_challenges.pop(challenge_id, None)
+        return jsonify({"error": "Too many incorrect attempts. Please request a new code."}), 429
+
+    challenge["attempts"] += 1
+    if not re.fullmatch(r"\d{6}", code) or not hmac.compare_digest(challenge["digest"], otp_digest(challenge_id, code)):
+        return jsonify({"error": "The OTP is incorrect. Please try again."}), 400
+
+    mobile = challenge["mobile"]
+    otp_challenges.pop(challenge_id, None)
+    return jsonify({"mobile": mobile, "verification_token": otp_serializer.dumps({"mobile": mobile})})
 
 
 @app.errorhandler(StorageError)
@@ -368,14 +544,24 @@ def remove_wishlist(product_id):
         conn.close()
 
 
-@app.post("/api/orders")
-def create_order():
+@app.post("/api/payments/razorpay/order")
+def create_razorpay_order():
     data = request.get_json(silent=True) or {}
-    customer, email, items = data.get("customer", "").strip(), data.get("email", "").strip(), data.get("items", [])
-    if not customer or "@" not in email or not items:
-        return jsonify({"error": "Name, valid email, and cart items are required."}), 400
-    ids = [item.get("product_id") for item in items]
-    
+    customer = str(data.get("customer", "")).strip()
+    mobile = normalize_mobile(data.get("mobile"))
+    address = normalize_address(data.get("address"))
+    raw_items = data.get("items", [])
+    if not customer or not mobile or not address or not raw_items:
+        return jsonify({"error": "Enter a valid name, mobile number, complete address, city, and PIN code."}), 400
+
+    try:
+        items = [{"product_id": int(item["product_id"]), "quantity": int(item.get("quantity", 1))} for item in raw_items]
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "The cart contains invalid items."}), 400
+    if any(item["quantity"] < 1 or item["quantity"] > 20 for item in items):
+        return jsonify({"error": "Item quantity must be between 1 and 20."}), 400
+
+    ids = [item["product_id"] for item in items]
     conn = db()
     cur = conn.cursor()
     try:
@@ -386,15 +572,91 @@ def create_order():
         
         if len(prices) != len(set(ids)):
             return jsonify({"error": "One or more products are unavailable."}), 400
-        
+
         total = sum(prices[item["product_id"]] * max(1, int(item.get("quantity", 1))) for item in items)
+        receipt = f"pandu-{uuid.uuid4().hex[:24]}"
+        try:
+            razorpay_order = razorpay_request("POST", "/orders", {
+                "amount": total * 100,
+                "currency": "INR",
+                "receipt": receipt,
+                "notes": {"store": "Pandu"},
+            })
+        except RuntimeError as error:
+            status = 503 if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET else 502
+            return jsonify({"error": str(error)}), status
+        if not razorpay_order.get("id") or razorpay_order.get("amount") != total * 100:
+            return jsonify({"error": "Razorpay returned an invalid order. Please try again."}), 502
+
         cur.execute(
-            "INSERT INTO orders(customer, email, total, items, created_at) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (customer, email, total, json.dumps(items), datetime.now(timezone.utc).isoformat()),
+            """INSERT INTO payment_sessions
+               (razorpay_order_id, customer, email, mobile, address, amount, items, created_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+            (razorpay_order["id"], customer, None, mobile, address, total, json.dumps(items),
+             datetime.now(timezone.utc).isoformat()),
         )
-        order_id = cur.fetchone()[0]
         conn.commit()
-        return jsonify({"order_id": order_id, "total": total, "status": "confirmed"}), 201
+        return jsonify({
+            "key_id": RAZORPAY_KEY_ID,
+            "order_id": razorpay_order["id"],
+            "amount": total * 100,
+            "currency": "INR",
+            "prefill": {"name": customer, "contact": mobile},
+        }), 201
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.post("/api/orders")
+def create_order():
+    data = request.get_json(silent=True) or {}
+    razorpay_order_id = str(data.get("razorpay_order_id", "")).strip()
+    razorpay_payment_id = str(data.get("razorpay_payment_id", "")).strip()
+    razorpay_signature = str(data.get("razorpay_signature", "")).strip()
+    if not razorpay_order_id or not razorpay_payment_id or not razorpay_signature:
+        return jsonify({"error": "A completed Razorpay payment is required."}), 400
+
+    conn = db()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cur.execute("SELECT * FROM payment_sessions WHERE razorpay_order_id = %s FOR UPDATE", (razorpay_order_id,))
+        payment_session = cur.fetchone()
+        if not payment_session:
+            return jsonify({"error": "Payment session not found. Please restart checkout."}), 404
+        if payment_session["completed"]:
+            return jsonify({"error": "This payment has already been used."}), 409
+
+        expected_signature = hmac.new(
+            RAZORPAY_KEY_SECRET.encode(),
+            f"{payment_session['razorpay_order_id']}|{razorpay_payment_id}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(expected_signature, razorpay_signature):
+            return jsonify({"error": "Payment verification failed."}), 400
+
+        try:
+            payment = razorpay_request("GET", f"/payments/{razorpay_payment_id}")
+        except RuntimeError as error:
+            return jsonify({"error": str(error)}), 502
+        if (payment.get("order_id") != payment_session["razorpay_order_id"] or
+                payment.get("amount") != payment_session["amount"] * 100):
+            return jsonify({"error": "Payment details do not match this order."}), 400
+        if payment.get("status") != "captured":
+            return jsonify({"error": "Payment is still being processed. Please check again shortly."}), 409
+
+        cur.execute(
+            """INSERT INTO orders
+               (customer, email, mobile, address, total, items, created_at, razorpay_order_id, razorpay_payment_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (payment_session["customer"], payment_session["email"], payment_session["mobile"],
+             payment_session["address"], payment_session["amount"], json.dumps(payment_session["items"]),
+             datetime.now(timezone.utc).isoformat(), payment_session["razorpay_order_id"], razorpay_payment_id),
+        )
+        order_id = cur.fetchone()["id"]
+        cur.execute("UPDATE payment_sessions SET completed = TRUE WHERE razorpay_order_id = %s", (razorpay_order_id,))
+        conn.commit()
+        return jsonify({"order_id": order_id, "total": payment_session["amount"], "status": "confirmed"}), 201
     finally:
         cur.close()
         conn.close()
