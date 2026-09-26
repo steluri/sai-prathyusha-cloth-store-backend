@@ -42,13 +42,12 @@ Standard Checkout places UPI first and displays Razorpay's UPI/QR experience.
 Available UPI apps and QR presentation depend on the device and the payment
 methods enabled for the Razorpay account.
 
-## Email verification with AWS SES
+## Email sending with AWS SES
 
-Checkout sends email verification requests to `/api/send-email`; OTP verification
-uses `/api/otp/verify`. The endpoint accepts `email`, `subject`, and `message`;
-checkout also includes `name` and uses `{otp}` in the message. The backend
-generates and substitutes the code, and uses `SES_FROM_EMAIL` as the SES sender.
-The legacy send endpoint `/api/otp/send` remains available.
+Checkout sends a test email to `/api/send-email` with `email`, `subject`, and
+`message`, then continues without verifying email ownership. The backend uses
+`SES_FROM_EMAIL` as the SES sender. Standalone OTP endpoints `/api/otp/send` and
+`/api/otp/verify` remain available separately.
 
 Example request:
 
@@ -59,26 +58,21 @@ Example request:
   "message": "Hello from my Flask application using Amazon SES."
 }
 ```
-OTP codes are sent by SES, time-limited, single-use, and attempt-limited. Verify
-the sender address or domain in SES and set the sender in `.env`:
+Verify the sender address or domain in SES and set the sender in `.env`:
 
 ```env
 OTP_EMAIL_BACKEND=ses
 SES_FROM_EMAIL=verified-sender@example.com
 AWS_REGION=ap-south-1
 AWS_PROFILE=cloth-store
-OTP_SECRET=use-a-strong-random-secret
-OTP_VERIFICATION_TOKEN_SECONDS=1800
 ```
 
 Configure the local profile with `aws configure --profile cloth-store`; Boto3
 uses it through the standard AWS credential chain. In production, use an
 attached IAM role instead. Grant the identity `ses:SendEmail` permission. SES
 sandbox accounts can send only to verified recipients; request production
-access before sending to customers. Set `OTP_EMAIL_BACKEND=console` for local
-testing; that mode returns the development OTP in the send response.
-
-OTP messages are sent directly to the verified checkout email address.
+access before sending to customers. Configure `OTP_EMAIL_BACKEND` and
+`OTP_SECRET` separately if using the standalone OTP endpoints.
 
 ## SMS order notifications with AWS SNS
 

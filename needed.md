@@ -1,8 +1,9 @@
-# AWS Email OTP and SMS Setup
+# AWS Email and SMS Setup
 
-Checkout sends email verification codes through Amazon SES. SNS is only used
-for optional order-status SMS and topic notifications. Live delivery requires
-AWS credentials and verified service identities.
+Checkout sends a test email through Amazon SES without verifying email
+ownership. SNS is only used for optional order-status SMS and topic
+notifications. Live delivery requires AWS credentials and verified service
+identities.
 
 ## Required AWS Setup
 
@@ -19,8 +20,8 @@ AWS credentials and verified service identities.
   frontend.
 - **SES sender:** Set `SES_FROM_EMAIL` to an email address or domain verified in
   Amazon SES. In the SES sandbox, recipient addresses must also be verified;
-  request production access to send verification codes to customers.
-- **IAM permission:** Email OTP requires `ses:SendEmail`. Optional SNS order
+  request production access before sending to customers.
+- **IAM permission:** Email sending requires `ses:SendEmail`. Optional SNS order
   notifications require `sns:Publish`. Create a least-privilege policy in
   **IAM > Policies** and attach it to the user or role; scope topic publishing
   to the specific topic ARN where possible.
@@ -66,10 +67,8 @@ Where to get the details:
 2. Confirm the IAM identity has `sns:Publish`, the region is correct, and the
    recipient is verified if the account is still in the SMS sandbox.
 3. Start the backend and POST `email`, `subject`, and `message` fields to
-  `/api/send-email`. For checkout verification, also send `name` and put
-  `{otp}` in the message. The backend uses `SES_FROM_EMAIL` as the sender. In
-  SES mode the response does not reveal the OTP; check the inbox and backend
-  logs if delivery fails.
+  `/api/send-email`. The backend uses `SES_FROM_EMAIL` as the sender. Confirm
+  delivery in the recipient inbox and check backend logs if sending fails.
 
 SES email and SNS SMS are billable AWS services. Check current pricing and
 account limits in the AWS Console before testing.
