@@ -19,7 +19,7 @@ def initialize_schema():
     try:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS products (
-                id SERIAL PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 category TEXT NOT NULL,
                 price INTEGER NOT NULL,
@@ -45,22 +45,29 @@ def initialize_schema():
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS orders (
-                id SERIAL PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 customer TEXT NOT NULL,
                 email TEXT,
                 mobile TEXT,
+                address TEXT,
                 total INTEGER NOT NULL,
-                items JSONB NOT NULL,
+                items TEXT NOT NULL,
                 created_at TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'confirmed'
+                status TEXT NOT NULL DEFAULT 'confirmed',
+                razorpay_order_id TEXT,
+                razorpay_payment_id TEXT
             );
         """)
-        cursor.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS mobile TEXT;")
-        cursor.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS address TEXT;")
-        cursor.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'confirmed';")
-        cursor.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS razorpay_order_id TEXT;")
-        cursor.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS razorpay_payment_id TEXT;")
-        cursor.execute("ALTER TABLE orders ALTER COLUMN email DROP NOT NULL;")
+        order_columns = {row["name"] for row in cursor.execute("PRAGMA table_info(orders)")}
+        for name, declaration in (
+            ("mobile", "TEXT"),
+            ("address", "TEXT"),
+            ("status", "TEXT NOT NULL DEFAULT 'confirmed'"),
+            ("razorpay_order_id", "TEXT"),
+            ("razorpay_payment_id", "TEXT"),
+        ):
+            if name not in order_columns:
+                cursor.execute(f"ALTER TABLE orders ADD COLUMN {name} {declaration}")
         cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS orders_razorpay_payment_id_idx ON orders(razorpay_payment_id) WHERE razorpay_payment_id IS NOT NULL;")
 
         cursor.execute("""
@@ -71,12 +78,11 @@ def initialize_schema():
                 mobile TEXT NOT NULL,
                 address TEXT NOT NULL,
                 amount INTEGER NOT NULL,
-                items JSONB NOT NULL,
+                items TEXT NOT NULL,
                 completed BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at TEXT NOT NULL
             );
         """)
-        cursor.execute("ALTER TABLE payment_sessions ALTER COLUMN email DROP NOT NULL;")
         connection.commit()
 
         cursor.execute("SELECT COUNT(*) FROM products;")
@@ -85,7 +91,7 @@ def initialize_schema():
                 cursor.execute("""
                     INSERT INTO products
                     (name, category, price, old_price, image, badge, color, description, image_front)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, product)
             cursor.execute("UPDATE products SET image_front = image WHERE image_front IS NULL;")
             connection.commit()

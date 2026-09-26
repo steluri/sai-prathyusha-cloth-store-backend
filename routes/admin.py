@@ -1,5 +1,3 @@
-import psycopg2
-import psycopg2.extras
 from flask import Blueprint, jsonify, request
 from werkzeug.security import check_password_hash
 
@@ -49,12 +47,12 @@ def create_admin_blueprint(services):
             image_paths[slot] = saved
 
         conn = services.db()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur = conn.cursor()
         try:
             cur.execute(
                 """INSERT INTO products (name, category, price, old_price, image, badge, color, description,
                     image_front, image_back, image_side, image_closeup, image_model, image_fit)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    RETURNING *""",
                 (name, category, price, old_price, image_paths["front"], badge, color, description,
                  image_paths["front"], image_paths["back"], image_paths["side"],
@@ -71,9 +69,9 @@ def create_admin_blueprint(services):
     @services.require_admin
     def admin_update_product(product_id):
         conn = services.db()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur = conn.cursor()
         try:
-            cur.execute("SELECT * FROM products WHERE id = %s", (product_id,))
+            cur.execute("SELECT * FROM products WHERE id = ?", (product_id,))
             existing = cur.fetchone()
             if not existing:
                 return jsonify({"error": "Product not found"}), 404
@@ -107,9 +105,9 @@ def create_admin_blueprint(services):
                     image_paths[slot] = existing[f"image_{slot}"]
 
             cur.execute(
-                """UPDATE products SET name = %s, category = %s, price = %s, old_price = %s, image = %s, badge = %s,
-                    color = %s, description = %s, image_front = %s, image_back = %s, image_side = %s,
-                    image_closeup = %s, image_model = %s, image_fit = %s WHERE id = %s
+                """UPDATE products SET name = ?, category = ?, price = ?, old_price = ?, image = ?, badge = ?,
+                    color = ?, description = ?, image_front = ?, image_back = ?, image_side = ?,
+                    image_closeup = ?, image_model = ?, image_fit = ? WHERE id = ?
                     RETURNING *""",
                 (name, category, price, old_price, image_paths["front"], badge, color, description,
                  image_paths["front"], image_paths["back"], image_paths["side"],
@@ -126,14 +124,14 @@ def create_admin_blueprint(services):
     @services.require_admin
     def admin_delete_product(product_id):
         conn = services.db()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur = conn.cursor()
         try:
-            cur.execute("SELECT * FROM products WHERE id = %s", (product_id,))
+            cur.execute("SELECT * FROM products WHERE id = ?", (product_id,))
             existing = cur.fetchone()
             if not existing:
                 return jsonify({"error": "Product not found"}), 404
-            cur.execute("DELETE FROM wishlist WHERE product_id = %s", (product_id,))
-            cur.execute("DELETE FROM products WHERE id = %s", (product_id,))
+            cur.execute("DELETE FROM wishlist WHERE product_id = ?", (product_id,))
+            cur.execute("DELETE FROM products WHERE id = ?", (product_id,))
             conn.commit()
         finally:
             cur.close()
