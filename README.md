@@ -12,7 +12,10 @@ python app.py
 
 The API runs at `http://localhost:5001`. Configure allowed frontend origins with the comma-separated `CORS_ORIGINS` value in `.env`.
 
-PostgreSQL stores the application data. Local uploads are created inside this
+SQLite stores application data in `store.db` inside this directory. The file is
+created automatically on startup and ignored by Git, so no separate database
+server or database package is required. Override its location with
+`SQLITE_DATABASE_PATH` if needed. Local uploads are created inside this
 directory and ignored by Git.
 
 Flask setup and shared services live in `app.py`. PostgreSQL connection setup
