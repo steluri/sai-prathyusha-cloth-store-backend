@@ -1,16 +1,15 @@
-# AWS SNS OTP Setup
+# AWS Email OTP and SMS Setup
 
-The backend already sends OTP SMS directly to the customer's mobile number with
-Amazon SNS. `SMS_BACKEND` is now set to `sns`. Live delivery still requires the
-AWS access and SMS account setup below. No AWS SDK credentials are currently
-available in this development environment.
+Checkout sends email verification codes through Amazon SES. SNS is only used
+for optional order-status SMS and topic notifications. Live delivery requires
+AWS credentials and verified service identities.
 
 ## Required AWS Setup
 
-- **AWS account and region:** The backend currently uses `AWS_REGION=ap-south-1`.
-  Use a region that supports SMS and keep the SNS client and any SNS topic in
-  that same region. Find regions in the AWS Region selector and the AWS End User
-  Messaging SMS supported-regions documentation.
+- **AWS account and region:** The backend uses `AWS_REGION=ap-south-1`. Verify
+  the SES sender in this region. SNS topics must also be in the region used by
+  the backend; the current optional topic ARN is in `ap-south-2` and will need
+  a matching `AWS_REGION` if topic publishing is enabled.
 - **AWS credentials:** Give the backend an identity allowed to publish SMS.
   For a deployed backend, use an IAM role attached to its compute service. For
   local development, configure an AWS CLI profile with `aws configure --profile
@@ -18,10 +17,13 @@ available in this development environment.
   profile through its standard credential chain. Find or create identities in
   the AWS Console under **IAM**; do not commit access keys or put them in the
   frontend.
-- **IAM permission:** The identity needs `sns:Publish` for direct SMS. Create a
-  least-privilege policy in **IAM > Policies** and attach it to the user or role.
-  Direct SMS publishing may require `Resource: "*"`; scope topic publishing to
-  the specific topic ARN where possible.
+- **SES sender:** Set `SES_FROM_EMAIL` to an email address or domain verified in
+  Amazon SES. In the SES sandbox, recipient addresses must also be verified;
+  request production access to send verification codes to customers.
+- **IAM permission:** Email OTP requires `ses:SendEmail`. Optional SNS order
+  notifications require `sns:Publish`. Create a least-privilege policy in
+  **IAM > Policies** and attach it to the user or role; scope topic publishing
+  to the specific topic ARN where possible.
 - **SMS account access and budget:** In the AWS Console, open **Amazon SNS >
   Text messaging (SMS)** (or **AWS End User Messaging SMS**) in the configured
   region. Review the account's SMS sandbox, spending limit, and delivery
@@ -31,20 +33,17 @@ available in this development environment.
   Generate one locally with `openssl rand -hex 32`. Keep it private and stable
   across restarts so active verification tokens remain valid.
 
-The SNS topic ARN is **not required for OTPs**: OTPs go directly to the phone
-number and must not be broadcast to a topic. `ORDER_STATUS_SNS_TOPIC_ARN` is only
-for optional order-status topic notifications. The current local topic ARN is
-in `ap-south-2`, while `AWS_REGION` is `ap-south-1`; SNS topics are regional, so
-make these regions match if order-topic publishing is needed. Direct customer
-order SMS does not require that topic.
+OTP email does not use SNS or the SNS topic. `ORDER_STATUS_SNS_TOPIC_ARN` is
+only for optional order-status topic notifications.
 
-## India SMS Registration
+## Optional India SMS Registration
 
-This store accepts Indian mobile numbers. For India local-route SMS, AWS's
-current guidance requires TRAI DLT registration for the business/use case and
-message template. The Entity ID and Template ID are obtained from the DLT
-registration portal; AWS End User Messaging SMS documents the process and
-sender ID registration. The OTP text must match the registered template.
+Checkout does not collect mobile numbers, so this registration is not needed for
+email OTP or new checkout orders. If direct SMS is added later, AWS's current
+guidance for India local-route SMS requires TRAI DLT registration for the
+business/use case and message template. The Entity ID and Template ID are
+obtained from the DLT registration portal; AWS End User Messaging SMS documents
+the process and sender ID registration.
 
 The current integration calls SNS `Publish` with a phone number and message; it
 does not pass India DLT Entity ID or Template ID values. Confirm an approved
@@ -66,9 +65,10 @@ Where to get the details:
    `aws sts get-caller-identity`.
 2. Confirm the IAM identity has `sns:Publish`, the region is correct, and the
    recipient is verified if the account is still in the SMS sandbox.
-3. Start the backend and send a request to `/api/otp/send` with a test mobile
-   number. In SNS mode the response does not reveal the OTP; check the phone and
-   backend logs if delivery fails.
+3. Start the backend and send a request to `/api/send-email` with `email`,
+  `subject`, and `message`. For checkout verification, include `name` and use
+  `{otp}` in the message template. In SES mode the response does not reveal
+  the OTP; check the inbox and backend logs if delivery fails.
 
-SMS is a billable AWS service. Check current per-message pricing and the account
-spending limit in the AWS Console before testing.
+SES email and SNS SMS are billable AWS services. Check current pricing and
+account limits in the AWS Console before testing.

@@ -42,12 +42,14 @@ token_serializer = URLSafeTimedSerializer(
 )
 
 SMS_BACKEND = os.environ.get("SMS_BACKEND", os.environ.get("OTP_SMS_BACKEND", "console")).strip().lower()
+OTP_EMAIL_BACKEND = os.environ.get("OTP_EMAIL_BACKEND", "ses").strip().lower()
+SES_FROM_EMAIL = os.environ.get("SES_FROM_EMAIL", "").strip()
 OTP_EXPIRY_SECONDS = int(os.environ.get("OTP_EXPIRY_SECONDS", "300"))
 OTP_VERIFICATION_TOKEN_SECONDS = int(os.environ.get("OTP_VERIFICATION_TOKEN_SECONDS", "1800"))
 OTP_RESEND_SECONDS = int(os.environ.get("OTP_RESEND_SECONDS", "30"))
 OTP_MAX_ATTEMPTS = int(os.environ.get("OTP_MAX_ATTEMPTS", "5"))
 OTP_SECRET = os.environ.get("OTP_SECRET", os.environ.get("ADMIN_TOKEN_SECRET", "pandu-local-development-secret"))
-otp_serializer = URLSafeTimedSerializer(OTP_SECRET, salt="mobile-verification")
+otp_serializer = URLSafeTimedSerializer(OTP_SECRET, salt="email-verification")
 otp_challenges = {}
 otp_last_sent = {}
 SNS_REGION = os.environ.get("AWS_REGION", os.environ.get("OTP_AWS_REGION", "ap-south-1"))
@@ -67,6 +69,13 @@ def normalize_mobile(value):
     if not re.fullmatch(r"[6-9]\d{9}", digits):
         return None
     return f"+91{digits}"
+
+
+def normalize_email(value):
+    email = str(value or "").strip().lower()
+    if len(email) > 254 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+        return None
+    return email
 
 
 def normalize_address(value):
@@ -101,21 +110,39 @@ def send_sms(mobile, message):
     raise RuntimeError("SMS_BACKEND must be 'console' or 'sns'.")
 
 
-def send_otp_sms(mobile, code):
-    expiry_minutes = max(1, (OTP_EXPIRY_SECONDS + 59) // 60)
-    message = f"Your Pandu verification code is {code}. It expires in {expiry_minutes} minutes. Do not share it."
-    send_sms(mobile, message)
+def send_email(email, subject, message):
+    if OTP_EMAIL_BACKEND == "console":
+        app.logger.info("Development email to %s, subject %s: %s", email, subject, message)
+        return False
+    if OTP_EMAIL_BACKEND == "ses":
+        if not SES_FROM_EMAIL:
+            raise RuntimeError("Set SES_FROM_EMAIL to a verified SES sender address.")
+        boto3.client("ses", region_name=SNS_REGION).send_email(
+            Source=SES_FROM_EMAIL,
+            Destination={"ToAddresses": [email]},
+            Message={
+                "Subject": {"Data": subject},
+                "Body": {"Text": {"Data": message}},
+            },
+        )
+        return True
+    raise RuntimeError("OTP_EMAIL_BACKEND must be 'console' or 'ses'.")
+
+
+def send_otp_email(email, code, subject="OTP for verification", message_template="{otp} for the verification, do not share with anyone"):
+    return send_email(email, subject, message_template.replace("{otp}", code))
 
 
 def notify_order_status(mobile, order_id, status):
-    if not mobile:
+    if not mobile and not ORDER_STATUS_SNS_TOPIC_ARN:
         return False
     message = f"Pandu order #{order_id}: your order is {status}. We will keep you updated."
     sms_sent = False
-    try:
-        sms_sent = send_sms(mobile, message)
-    except Exception:
-        app.logger.exception("Could not send order status SMS to customer for order %s", order_id)
+    if mobile:
+        try:
+            sms_sent = send_sms(mobile, message)
+        except Exception:
+            app.logger.exception("Could not send order status SMS to customer for order %s", order_id)
     if ORDER_STATUS_SNS_TOPIC_ARN:
         try:
             boto3.client("sns", region_name=SNS_REGION).publish(
@@ -192,6 +219,7 @@ services = SimpleNamespace(
     OTP_RESEND_SECONDS=OTP_RESEND_SECONDS,
     OTP_VERIFICATION_TOKEN_SECONDS=OTP_VERIFICATION_TOKEN_SECONDS,
     ORDER_STATUSES=ORDER_STATUSES,
+    OTP_EMAIL_BACKEND=OTP_EMAIL_BACKEND,
     RAZORPAY_KEY_ID=RAZORPAY_KEY_ID,
     RAZORPAY_KEY_SECRET=RAZORPAY_KEY_SECRET,
     SMS_BACKEND=SMS_BACKEND,
@@ -200,6 +228,7 @@ services = SimpleNamespace(
     db=db,
     delete_uploaded_file=delete_uploaded_file,
     normalize_address=normalize_address,
+    normalize_email=normalize_email,
     normalize_mobile=normalize_mobile,
     notify_order_status=notify_order_status,
     otp_challenges=otp_challenges,
@@ -209,7 +238,8 @@ services = SimpleNamespace(
     razorpay_request=razorpay_request,
     require_admin=require_admin,
     save_image=save_image,
-    send_otp_sms=send_otp_sms,
+    send_email=send_email,
+    send_otp_email=send_otp_email,
 )
 
 app.register_blueprint(create_system_blueprint(storage))
