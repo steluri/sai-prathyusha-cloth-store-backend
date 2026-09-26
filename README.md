@@ -15,6 +15,11 @@ The API runs at `http://localhost:5001`. Configure allowed frontend origins with
 PostgreSQL stores the application data. Local uploads are created inside this
 directory and ignored by Git.
 
+Flask setup and shared services live in `app.py`. PostgreSQL connection setup
+is in `database.py`; table creation and initial product seeding are in
+`schema.py`. HTTP handlers are grouped as blueprints under `routes/`: OTP,
+catalog and wishlist, admin products, checkout and orders, and system/uploads.
+
 ## Razorpay checkout
 
 Add Razorpay test keys to `.env` before using checkout:
@@ -33,3 +38,34 @@ test mode.
 Standard Checkout places UPI first and displays Razorpay's UPI/QR experience.
 Available UPI apps and QR presentation depend on the device and the payment
 methods enabled for the Razorpay account.
+
+## SMS notifications with AWS SNS
+
+The OTP send and verify endpoints are `/api/otp/send` and `/api/otp/verify`.
+OTP codes are time-limited, single-use, and attempt-limited. Set the following
+in `.env` to send OTPs and order status updates as SMS messages:
+
+```env
+SMS_BACKEND=sns
+AWS_REGION=ap-south-1
+ORDER_STATUS_SNS_TOPIC_ARN=arn:aws:sns:ap-south-1:123456789012:Order-status-topic
+OTP_SECRET=use-a-strong-random-secret
+OTP_VERIFICATION_TOKEN_SECONDS=1800
+```
+
+The application uses the standard AWS SDK credential chain; use an attached IAM
+role in production or a local AWS profile for development. Grant the identity
+`sns:Publish` permission. SMS delivery also depends on the AWS account's SNS
+SMS origination settings, destination-country rules, and spending limits. The
+default `SMS_BACKEND=console` keeps development local and returns the OTP in
+the send response.
+
+OTP messages are published directly to the verified checkout mobile number,
+not to a topic, because topic messages are delivered to every subscriber.
+`ORDER_STATUS_SNS_TOPIC_ARN` publishes order updates to the configured topic;
+order updates are also sent directly to the customer by SMS.
+
+Order status changes are managed from the admin console's Orders tab. Supported
+statuses are `confirmed`, `processing`, `shipped`, `delivered`, and `cancelled`.
+The customer receives an SMS after checkout confirmation and each actual status
+change; an SMS failure is logged without undoing a paid order or saved status.
