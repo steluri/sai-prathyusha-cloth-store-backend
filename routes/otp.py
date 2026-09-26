@@ -63,8 +63,6 @@ def create_otp_blueprint(services):
             return jsonify({"error": "Enter a valid email, subject, and message."}), 400
 
         if "{otp}" in message:
-            if not name:
-                return jsonify({"error": "Enter your name before requesting an OTP."}), 400
             return issue_email_otp(email, subject, message)
 
         now = time.time()

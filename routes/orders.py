@@ -15,21 +15,10 @@ def create_orders_blueprint(services):
         data = request.get_json(silent=True) or {}
         customer = str(data.get("customer", "")).strip()
         email = services.normalize_email(data.get("email"))
-        verification_token = str(data.get("verification_token", "")).strip()
         address = services.normalize_address(data.get("address"))
         raw_items = data.get("items", [])
         if not customer or not email or not address or not raw_items:
             return jsonify({"error": "Enter a valid name, email address, complete address, city, and PIN code."}), 400
-        try:
-            verified_email = services.otp_serializer.loads(
-                verification_token,
-                max_age=services.OTP_VERIFICATION_TOKEN_SECONDS,
-            ).get("email")
-        except (services.BadSignature, services.SignatureExpired):
-            return jsonify({"error": "Verify your email address before continuing to payment."}), 401
-        if verified_email != email:
-            return jsonify({"error": "The verified email address does not match checkout."}), 401
-
         try:
             items = [{"product_id": int(item["product_id"]), "quantity": int(item.get("quantity", 1))} for item in raw_items]
         except (KeyError, TypeError, ValueError):
