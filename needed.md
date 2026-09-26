@@ -65,10 +65,11 @@ Where to get the details:
    `aws sts get-caller-identity`.
 2. Confirm the IAM identity has `sns:Publish`, the region is correct, and the
    recipient is verified if the account is still in the SMS sandbox.
-3. Start the backend and send a request to `/api/send-email` with `email`,
-  `subject`, and `message`. For checkout verification, include `name` and use
-  `{otp}` in the message template. In SES mode the response does not reveal
-  the OTP; check the inbox and backend logs if delivery fails.
+3. Start the backend and POST `email`, `subject`, and `message` fields to
+  `/api/send-email`. For checkout verification, also send `name` and put
+  `{otp}` in the message. The backend uses `SES_FROM_EMAIL` as the sender. In
+  SES mode the response does not reveal the OTP; check the inbox and backend
+  logs if delivery fails.
 
 SES email and SNS SMS are billable AWS services. Check current pricing and
 account limits in the AWS Console before testing.

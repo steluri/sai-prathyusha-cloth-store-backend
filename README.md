@@ -45,10 +45,20 @@ methods enabled for the Razorpay account.
 ## Email verification with AWS SES
 
 Checkout sends email verification requests to `/api/send-email`; OTP verification
-uses `/api/otp/verify`. The API accepts `email`, `subject`, and `message`. For
-checkout OTPs, include `name` and use `{otp}` in `message`; the backend
-generates and substitutes the code. The legacy send endpoint `/api/otp/send`
-remains available.
+uses `/api/otp/verify`. The endpoint accepts `email`, `subject`, and `message`;
+checkout also includes `name` and uses `{otp}` in the message. The backend
+generates and substitutes the code, and uses `SES_FROM_EMAIL` as the SES sender.
+The legacy send endpoint `/api/otp/send` remains available.
+
+Example request:
+
+```json
+{
+  "email": "customer@example.com",
+  "subject": "Test Email",
+  "message": "Hello from my Flask application using Amazon SES."
+}
+```
 OTP codes are sent by SES, time-limited, single-use, and attempt-limited. Verify
 the sender address or domain in SES and set the sender in `.env`:
 

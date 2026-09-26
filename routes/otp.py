@@ -54,10 +54,11 @@ def create_otp_blueprint(services):
     @blueprint.post("/api/send-email")
     def send_email():
         data = request.get_json(silent=True) or {}
-        name = str(data.get("name", "")).strip()
         email = services.normalize_email(data.get("email"))
         subject = str(data.get("subject", "")).strip()
         message = str(data.get("message", "")).strip()
+        if not services.normalize_email(services.SES_FROM_EMAIL):
+            return jsonify({"error": "SES_FROM_EMAIL is not configured on the server."}), 503
         if not email or not subject or not message or len(subject) > 150 or len(message) > 10000:
             return jsonify({"error": "Enter a valid email, subject, and message."}), 400
 
