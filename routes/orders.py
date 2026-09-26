@@ -14,21 +14,21 @@ def create_orders_blueprint(services):
     def create_razorpay_order():
         data = request.get_json(silent=True) or {}
         customer = str(data.get("customer", "")).strip()
-        mobile = services.normalize_mobile(data.get("mobile"))
+        email = services.normalize_email(data.get("email"))
         verification_token = str(data.get("verification_token", "")).strip()
         address = services.normalize_address(data.get("address"))
         raw_items = data.get("items", [])
-        if not customer or not mobile or not address or not raw_items:
-            return jsonify({"error": "Enter a valid name, mobile number, complete address, city, and PIN code."}), 400
+        if not customer or not email or not address or not raw_items:
+            return jsonify({"error": "Enter a valid name, email address, complete address, city, and PIN code."}), 400
         try:
-            verified_mobile = services.otp_serializer.loads(
+            verified_email = services.otp_serializer.loads(
                 verification_token,
                 max_age=services.OTP_VERIFICATION_TOKEN_SECONDS,
-            ).get("mobile")
+            ).get("email")
         except (services.BadSignature, services.SignatureExpired):
-            return jsonify({"error": "Verify your mobile number before continuing to payment."}), 401
-        if verified_mobile != mobile:
-            return jsonify({"error": "The verified mobile number does not match checkout."}), 401
+            return jsonify({"error": "Verify your email address before continuing to payment."}), 401
+        if verified_email != email:
+            return jsonify({"error": "The verified email address does not match checkout."}), 401
 
         try:
             items = [{"product_id": int(item["product_id"]), "quantity": int(item.get("quantity", 1))} for item in raw_items]
@@ -67,7 +67,7 @@ def create_orders_blueprint(services):
                 """INSERT INTO payment_sessions
                    (razorpay_order_id, customer, email, mobile, address, amount, items, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (razorpay_order["id"], customer, None, mobile, address, total, json.dumps(items),
+                (razorpay_order["id"], customer, email, "", address, total, json.dumps(items),
                  datetime.now(timezone.utc).isoformat()),
             )
             conn.commit()
@@ -76,7 +76,7 @@ def create_orders_blueprint(services):
                 "order_id": razorpay_order["id"],
                 "amount": total * 100,
                 "currency": "INR",
-                "prefill": {"name": customer, "contact": mobile},
+                "prefill": {"name": customer, "email": email},
             }), 201
         finally:
             cur.close()
@@ -158,7 +158,7 @@ def create_orders_blueprint(services):
         conn = services.db()
         cur = conn.cursor()
         try:
-            cur.execute("SELECT id, customer, mobile, address, total, items, created_at, status FROM orders ORDER BY id DESC")
+            cur.execute("SELECT id, customer, email, mobile, address, total, items, created_at, status FROM orders ORDER BY id DESC")
             orders = [dict(row) for row in cur.fetchall()]
             for order in orders:
                 order["items"] = json.loads(order["items"])

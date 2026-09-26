@@ -42,33 +42,45 @@ Standard Checkout places UPI first and displays Razorpay's UPI/QR experience.
 Available UPI apps and QR presentation depend on the device and the payment
 methods enabled for the Razorpay account.
 
-## SMS notifications with AWS SNS
+## Email verification with AWS SES
 
-The OTP send and verify endpoints are `/api/otp/send` and `/api/otp/verify`.
-OTP codes are time-limited, single-use, and attempt-limited. Set the following
-in `.env` to send OTPs and order status updates as SMS messages:
+Checkout sends email verification requests to `/api/send-email`; OTP verification
+uses `/api/otp/verify`. The API accepts `email`, `subject`, and `message`. For
+checkout OTPs, include `name` and use `{otp}` in `message`; the backend
+generates and substitutes the code. The legacy send endpoint `/api/otp/send`
+remains available.
+OTP codes are sent by SES, time-limited, single-use, and attempt-limited. Verify
+the sender address or domain in SES and set the sender in `.env`:
 
 ```env
-SMS_BACKEND=sns
+OTP_EMAIL_BACKEND=ses
+SES_FROM_EMAIL=verified-sender@example.com
 AWS_REGION=ap-south-1
-ORDER_STATUS_SNS_TOPIC_ARN=arn:aws:sns:ap-south-1:123456789012:Order-status-topic
+AWS_PROFILE=cloth-store
 OTP_SECRET=use-a-strong-random-secret
 OTP_VERIFICATION_TOKEN_SECONDS=1800
 ```
 
-The application uses the standard AWS SDK credential chain; use an attached IAM
-role in production or a local AWS profile for development. Grant the identity
-`sns:Publish` permission. SMS delivery also depends on the AWS account's SNS
-SMS origination settings, destination-country rules, and spending limits. The
-default `SMS_BACKEND=console` keeps development local and returns the OTP in
-the send response.
+Configure the local profile with `aws configure --profile cloth-store`; Boto3
+uses it through the standard AWS credential chain. In production, use an
+attached IAM role instead. Grant the identity `ses:SendEmail` permission. SES
+sandbox accounts can send only to verified recipients; request production
+access before sending to customers. Set `OTP_EMAIL_BACKEND=console` for local
+testing; that mode returns the development OTP in the send response.
 
-OTP messages are published directly to the verified checkout mobile number,
-not to a topic, because topic messages are delivered to every subscriber.
-`ORDER_STATUS_SNS_TOPIC_ARN` publishes order updates to the configured topic;
-order updates are also sent directly to the customer by SMS.
+OTP messages are sent directly to the verified checkout email address.
+
+## SMS order notifications with AWS SNS
+
+Set `SMS_BACKEND=sns`, `AWS_REGION`, and optionally
+`ORDER_STATUS_SNS_TOPIC_ARN` to send order status updates by SMS/topic. The
+checkout does not collect mobile numbers, so direct customer SMS is not sent for
+new orders. Topic notifications can still be sent to configured subscribers.
+Configure the identity with `sns:Publish` permission. The default
+`SMS_BACKEND=console` keeps SMS notifications local.
 
 Order status changes are managed from the admin console's Orders tab. Supported
 statuses are `confirmed`, `processing`, `shipped`, `delivered`, and `cancelled`.
-The customer receives an SMS after checkout confirmation and each actual status
-change; an SMS failure is logged without undoing a paid order or saved status.
+New checkout orders do not collect a mobile number, so order updates are sent
+only to configured SNS topic subscribers. Older orders with a saved mobile
+number can still receive direct SMS updates.
