@@ -210,6 +210,7 @@ services = SimpleNamespace(
     require_admin=require_admin,
     save_image=save_image,
     send_otp_sms=send_otp_sms,
+    token_serializer=token_serializer,
 )
 
 app.register_blueprint(create_system_blueprint(storage))
