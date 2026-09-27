@@ -239,7 +239,6 @@ services = SimpleNamespace(
     razorpay_request=razorpay_request,
     require_admin=require_admin,
     save_image=save_image,
-    send_otp_sms=send_otp_sms,
     token_serializer=token_serializer,
     send_email=send_email,
     send_otp_email=send_otp_email,
