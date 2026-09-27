@@ -10,6 +10,17 @@ from flask import Blueprint, current_app, jsonify, request
 def create_otp_blueprint(services):
     blueprint = Blueprint("otp", __name__)
 
+    def email_error_response(message, error):
+        response = {
+            "error": message,
+            "error_message": str(error),
+            "status_code": 502,
+        }
+        upstream_status = getattr(error, "response", {}).get("ResponseMetadata", {}).get("HTTPStatusCode")
+        if upstream_status is not None:
+            response["upstream_status_code"] = upstream_status
+        return jsonify(response), 502
+
     def issue_email_otp(email, subject="OTP for verification", message_template="{otp} for the verification, do not share with anyone"):
         now = time.time()
         retry_after = int(services.otp_last_sent.get(email, 0) + services.OTP_RESEND_SECONDS - now)
@@ -33,10 +44,10 @@ def create_otp_blueprint(services):
         }
         try:
             services.send_otp_email(email, code, subject, message_template)
-        except Exception:
+        except Exception as error:
             services.otp_challenges.pop(challenge_id, None)
             current_app.logger.exception("Could not send OTP")
-            return jsonify({"error": "Could not send the OTP. Please try again."}), 502
+            return email_error_response("Could not send the OTP. Please try again.", error)
 
         services.otp_last_sent[email] = now
         response = {"challenge_id": challenge_id, "expires_in": services.OTP_EXPIRY_SECONDS}
@@ -74,9 +85,9 @@ def create_otp_blueprint(services):
             }), 429
         try:
             sent = services.send_email(email, subject, message)
-        except Exception:
+        except Exception as error:
             current_app.logger.exception("Could not send email")
-            return jsonify({"error": "Could not send the email. Please try again."}), 502
+            return email_error_response("Could not send the email. Please try again.", error)
         services.otp_last_sent[email] = now
         return jsonify({"sent": sent}), 200
 
