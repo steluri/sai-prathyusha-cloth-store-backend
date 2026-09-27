@@ -4,8 +4,6 @@ import json
 import uuid
 from datetime import datetime, timezone
 
-import psycopg2
-import psycopg2.extras
 from flask import Blueprint, jsonify, request
 
 
@@ -16,22 +14,11 @@ def create_orders_blueprint(services):
     def create_razorpay_order():
         data = request.get_json(silent=True) or {}
         customer = str(data.get("customer", "")).strip()
-        mobile = services.normalize_mobile(data.get("mobile"))
-        verification_token = str(data.get("verification_token", "")).strip()
+        email = services.normalize_email(data.get("email"))
         address = services.normalize_address(data.get("address"))
         raw_items = data.get("items", [])
-        if not customer or not mobile or not address or not raw_items:
-            return jsonify({"error": "Enter a valid name, mobile number, complete address, city, and PIN code."}), 400
-        try:
-            verified_mobile = services.otp_serializer.loads(
-                verification_token,
-                max_age=services.OTP_VERIFICATION_TOKEN_SECONDS,
-            ).get("mobile")
-        except (services.BadSignature, services.SignatureExpired):
-            return jsonify({"error": "Verify your mobile number before continuing to payment."}), 401
-        if verified_mobile != mobile:
-            return jsonify({"error": "The verified mobile number does not match checkout."}), 401
-
+        if not customer or not email or not address or not raw_items:
+            return jsonify({"error": "Enter a valid name, email address, complete address, city, and PIN code."}), 400
         try:
             items = [{"product_id": int(item["product_id"]), "quantity": int(item.get("quantity", 1))} for item in raw_items]
         except (KeyError, TypeError, ValueError):
@@ -43,7 +30,7 @@ def create_orders_blueprint(services):
         conn = services.db()
         cur = conn.cursor()
         try:
-            placeholders = ",".join(["%s"] * len(ids))
+            placeholders = ",".join(["?"] * len(ids))
             cur.execute(f"SELECT id, price FROM products WHERE id IN ({placeholders})", ids)
             rows = cur.fetchall()
             prices = {row[0]: row[1] for row in rows}
@@ -68,8 +55,8 @@ def create_orders_blueprint(services):
             cur.execute(
                 """INSERT INTO payment_sessions
                    (razorpay_order_id, customer, email, mobile, address, amount, items, created_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-                (razorpay_order["id"], customer, None, mobile, address, total, json.dumps(items),
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (razorpay_order["id"], customer, email, "", address, total, json.dumps(items),
                  datetime.now(timezone.utc).isoformat()),
             )
             conn.commit()
@@ -78,7 +65,7 @@ def create_orders_blueprint(services):
                 "order_id": razorpay_order["id"],
                 "amount": total * 100,
                 "currency": "INR",
-                "prefill": {"name": customer, "contact": mobile},
+                "prefill": {"name": customer, "email": email},
             }), 201
         finally:
             cur.close()
@@ -94,9 +81,9 @@ def create_orders_blueprint(services):
             return jsonify({"error": "A completed Razorpay payment is required."}), 400
 
         conn = services.db()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur = conn.cursor()
         try:
-            cur.execute("SELECT * FROM payment_sessions WHERE razorpay_order_id = %s FOR UPDATE", (razorpay_order_id,))
+            cur.execute("SELECT * FROM payment_sessions WHERE razorpay_order_id = ?", (razorpay_order_id,))
             payment_session = cur.fetchone()
             if not payment_session:
                 return jsonify({"error": "Payment session not found. Please restart checkout."}), 404
@@ -121,16 +108,27 @@ def create_orders_blueprint(services):
             if payment.get("status") != "captured":
                 return jsonify({"error": "Payment is still being processed. Please check again shortly."}), 409
 
+            cur.execute("BEGIN IMMEDIATE")
+            cur.execute("SELECT completed FROM payment_sessions WHERE razorpay_order_id = ?", (razorpay_order_id,))
+            current_session = cur.fetchone()
+            if not current_session:
+                conn.rollback()
+                return jsonify({"error": "Payment session not found. Please restart checkout."}), 404
+            if current_session["completed"]:
+                conn.rollback()
+                return jsonify({"error": "This payment has already been used."}), 409
+
             cur.execute(
                 """INSERT INTO orders
                    (customer, email, mobile, address, total, items, created_at, razorpay_order_id, razorpay_payment_id)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
                 (payment_session["customer"], payment_session["email"], payment_session["mobile"],
-                 payment_session["address"], payment_session["amount"], json.dumps(payment_session["items"]),
+                 payment_session["address"], payment_session["amount"],
+                 payment_session["items"] if isinstance(payment_session["items"], str) else json.dumps(payment_session["items"]),
                  datetime.now(timezone.utc).isoformat(), payment_session["razorpay_order_id"], razorpay_payment_id),
             )
             order_id = cur.fetchone()["id"]
-            cur.execute("UPDATE payment_sessions SET completed = TRUE WHERE razorpay_order_id = %s", (razorpay_order_id,))
+            cur.execute("UPDATE payment_sessions SET completed = TRUE WHERE razorpay_order_id = ?", (razorpay_order_id,))
             conn.commit()
             notification_sent = services.notify_order_status(payment_session["mobile"], order_id, "confirmed")
             return jsonify({
@@ -147,10 +145,13 @@ def create_orders_blueprint(services):
     @services.require_admin
     def admin_orders():
         conn = services.db()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur = conn.cursor()
         try:
-            cur.execute("SELECT id, customer, mobile, address, total, items, created_at, status FROM orders ORDER BY id DESC")
-            return jsonify([dict(row) for row in cur.fetchall()])
+            cur.execute("SELECT id, customer, email, mobile, address, total, items, created_at, status FROM orders ORDER BY id DESC")
+            orders = [dict(row) for row in cur.fetchall()]
+            for order in orders:
+                order["items"] = json.loads(order["items"])
+            return jsonify(orders)
         finally:
             cur.close()
             conn.close()
@@ -163,16 +164,17 @@ def create_orders_blueprint(services):
             return jsonify({"error": f"Status must be one of: {', '.join(sorted(services.ORDER_STATUSES))}."}), 400
 
         conn = services.db()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur = conn.cursor()
         try:
-            cur.execute("SELECT id, mobile, status FROM orders WHERE id = %s FOR UPDATE", (order_id,))
+            cur.execute("BEGIN IMMEDIATE")
+            cur.execute("SELECT id, mobile, status FROM orders WHERE id = ?", (order_id,))
             order = cur.fetchone()
             if not order:
                 conn.rollback()
                 return jsonify({"error": "Order not found."}), 404
             changed = order["status"] != status
             if changed:
-                cur.execute("UPDATE orders SET status = %s WHERE id = %s", (status, order_id))
+                cur.execute("UPDATE orders SET status = ? WHERE id = ?", (status, order_id))
                 conn.commit()
             else:
                 conn.rollback()
