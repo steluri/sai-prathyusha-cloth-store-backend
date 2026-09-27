@@ -15,6 +15,22 @@ The API runs at `http://localhost:5001`. Configure allowed frontend origins with
 PostgreSQL stores the application data. Local uploads are created inside this
 directory and ignored by Git.
 
+## Product images in S3
+
+Set `STORAGE_BACKEND=s3`, `OBJECT_STORAGE_BUCKET` to the bucket's exact name,
+and `OBJECT_STORAGE_REGION` to its AWS region in `.env`. The backend uses
+boto3's standard credential chain: use an AWS CLI profile locally or an
+attached IAM role in deployment. Grant that identity `s3:PutObject`,
+`s3:GetObject`, and `s3:DeleteObject` on the bucket's `products/*` objects.
+Keep the bucket private; with `OBJECT_STORAGE_PUBLIC_URL` unset, the API serves
+images through short-lived presigned URLs.
+
+Each uploaded image gets a unique S3 object key such as
+`products/front-<uuid>.jpg`. That key is the image reference ID; the product's
+`image_front`, `image_back`, and other `image_*` fields store it as
+`/uploads/<object-key>`. The admin create/update response and product API return
+those fields, and the `/uploads/...` route resolves them to the image.
+
 Flask setup and shared services live in `app.py`. PostgreSQL connection setup
 is in `database.py`; table creation and initial product seeding are in
 `schema.py`. HTTP handlers are grouped as blueprints under `routes/`: OTP,
