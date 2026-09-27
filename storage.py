@@ -26,7 +26,7 @@ def _object_key(file, slot: str) -> str:
     if extension not in ALLOWED_EXTENSIONS:
         raise ValueError(f"Unsupported file type for '{slot}' image.")
     safe_slot = secure_filename(slot) or "image"
-    return f"products/{safe_slot}-{uuid.uuid4().hex}.{extension}"
+    return f"Product_images/{safe_slot}-{uuid.uuid4().hex}.{extension}"
 
 
 def _upload_path(key: str) -> str:
