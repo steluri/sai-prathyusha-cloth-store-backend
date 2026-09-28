@@ -17,7 +17,7 @@ from flask_cors import CORS
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from storage import StorageError, build_storage
 from werkzeug.security import generate_password_hash
-from database import BASE_DIR, get_connection as db
+from database import BASE_DIR, IS_POSTGRES, get_connection as db
 from routes.admin import create_admin_blueprint
 from routes.catalog import create_catalog_blueprint
 from routes.orders import create_orders_blueprint
@@ -223,6 +223,7 @@ services = SimpleNamespace(
     SES_FROM_EMAIL=SES_FROM_EMAIL,
     RAZORPAY_KEY_ID=RAZORPAY_KEY_ID,
     RAZORPAY_KEY_SECRET=RAZORPAY_KEY_SECRET,
+    IS_POSTGRES=IS_POSTGRES,
     SMS_BACKEND=SMS_BACKEND,
     BadSignature=BadSignature,
     SignatureExpired=SignatureExpired,

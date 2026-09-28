@@ -33,7 +33,7 @@ def create_orders_blueprint(services):
             placeholders = ",".join(["?"] * len(ids))
             cur.execute(f"SELECT id, price FROM products WHERE id IN ({placeholders})", ids)
             rows = cur.fetchall()
-            prices = {row[0]: row[1] for row in rows}
+            prices = {row["id"]: row["price"] for row in rows}
             if len(prices) != len(set(ids)):
                 return jsonify({"error": "One or more products are unavailable."}), 400
 
@@ -89,6 +89,7 @@ def create_orders_blueprint(services):
                 return jsonify({"error": "Payment session not found. Please restart checkout."}), 404
             if payment_session["completed"]:
                 return jsonify({"error": "This payment has already been used."}), 409
+            conn.commit()
 
             expected_signature = hmac.new(
                 services.RAZORPAY_KEY_SECRET.encode(),
@@ -109,7 +110,8 @@ def create_orders_blueprint(services):
                 return jsonify({"error": "Payment is still being processed. Please check again shortly."}), 409
 
             cur.execute("BEGIN IMMEDIATE")
-            cur.execute("SELECT completed FROM payment_sessions WHERE razorpay_order_id = ?", (razorpay_order_id,))
+            lock_clause = " FOR UPDATE" if services.IS_POSTGRES else ""
+            cur.execute("SELECT completed FROM payment_sessions WHERE razorpay_order_id = ?" + lock_clause, (razorpay_order_id,))
             current_session = cur.fetchone()
             if not current_session:
                 conn.rollback()
@@ -167,7 +169,8 @@ def create_orders_blueprint(services):
         cur = conn.cursor()
         try:
             cur.execute("BEGIN IMMEDIATE")
-            cur.execute("SELECT id, mobile, status FROM orders WHERE id = ?", (order_id,))
+            lock_clause = " FOR UPDATE" if services.IS_POSTGRES else ""
+            cur.execute("SELECT id, mobile, status FROM orders WHERE id = ?" + lock_clause, (order_id,))
             order = cur.fetchone()
             if not order:
                 conn.rollback()

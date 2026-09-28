@@ -1,4 +1,4 @@
-from database import get_connection
+from database import IS_POSTGRES, get_connection
 
 
 PRODUCTS = [
@@ -16,10 +16,12 @@ PRODUCTS = [
 def initialize_schema():
     connection = get_connection()
     cursor = connection.cursor()
+    id_type = "BIGSERIAL PRIMARY KEY" if IS_POSTGRES else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    wishlist_id_type = "BIGINT" if IS_POSTGRES else "INTEGER"
     try:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS products (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id %s,
                 name TEXT NOT NULL,
                 category TEXT NOT NULL,
                 price INTEGER NOT NULL,
@@ -35,17 +37,17 @@ def initialize_schema():
                 image_model TEXT,
                 image_fit TEXT
             );
-        """)
+        """ % id_type)
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS wishlist (
-                product_id INTEGER PRIMARY KEY REFERENCES products(id) ON DELETE CASCADE
+                product_id %s PRIMARY KEY REFERENCES products(id) ON DELETE CASCADE
             );
-        """)
+        """ % wishlist_id_type)
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS orders (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id %s,
                 customer TEXT NOT NULL,
                 email TEXT,
                 mobile TEXT,
@@ -57,8 +59,12 @@ def initialize_schema():
                 razorpay_order_id TEXT,
                 razorpay_payment_id TEXT
             );
-        """)
-        order_columns = {row["name"] for row in cursor.execute("PRAGMA table_info(orders)")}
+        """ % id_type)
+        if IS_POSTGRES:
+            cursor.execute("SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'orders'")
+        else:
+            cursor.execute("PRAGMA table_info(orders)")
+        order_columns = {row["name"] for row in cursor.fetchall()}
         for name, declaration in (
             ("mobile", "TEXT"),
             ("address", "TEXT"),
@@ -85,8 +91,8 @@ def initialize_schema():
         """)
         connection.commit()
 
-        cursor.execute("SELECT COUNT(*) FROM products;")
-        if cursor.fetchone()[0] == 0:
+        cursor.execute("SELECT COUNT(*) AS product_count FROM products;")
+        if cursor.fetchone()["product_count"] == 0:
             for product in PRODUCTS:
                 cursor.execute("""
                     INSERT INTO products

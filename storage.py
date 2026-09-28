@@ -73,11 +73,11 @@ class S3Storage:
         if not self.bucket:
             raise StorageError("OBJECT_STORAGE_BUCKET is required when STORAGE_BACKEND=s3")
 
-        self.region = os.environ.get("OBJECT_STORAGE_REGION", "us-east-1").strip()
+        self.region = os.environ.get("OBJECT_STORAGE_REGION", "ap-south-1").strip()
         self.endpoint_url = os.environ.get("OBJECT_STORAGE_ENDPOINT_URL", "").strip() or None
         self.public_url = os.environ.get("OBJECT_STORAGE_PUBLIC_URL", "").strip().rstrip("/")
         addressing_style = os.environ.get("OBJECT_STORAGE_ADDRESSING_STYLE", "auto").strip()
-        config = Config(s3={"addressing_style": addressing_style})
+        config = Config(s3={"addressing_style": addressing_style}, signature_version="s3v4")
         options = {
             "service_name": "s3",
             "region_name": self.region,
@@ -135,7 +135,7 @@ class S3Storage:
             pass
 
         args = {"Bucket": self.bucket}
-        if not self.endpoint_url and self.region != "us-east-1":
+        if not self.endpoint_url and self.region != "ap-south-1":
             args["CreateBucketConfiguration"] = {"LocationConstraint": self.region}
         self.client.create_bucket(**args)
         return True
