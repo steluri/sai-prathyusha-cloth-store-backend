@@ -77,7 +77,7 @@ class S3Storage:
         self.endpoint_url = os.environ.get("OBJECT_STORAGE_ENDPOINT_URL", "").strip() or None
         self.public_url = os.environ.get("OBJECT_STORAGE_PUBLIC_URL", "").strip().rstrip("/")
         addressing_style = os.environ.get("OBJECT_STORAGE_ADDRESSING_STYLE", "auto").strip()
-        config = Config(s3={"addressing_style": addressing_style})
+        config = Config(s3={"addressing_style": addressing_style}, signature_version="s3v4")
         options = {
             "service_name": "s3",
             "region_name": self.region,
