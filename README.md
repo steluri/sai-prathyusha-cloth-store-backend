@@ -12,11 +12,14 @@ python app.py
 
 The API runs at `http://localhost:5001`. Configure allowed frontend origins with the comma-separated `CORS_ORIGINS` value in `.env`.
 
-SQLite stores application data in `store.db` inside this directory. The file is
-created automatically on startup and ignored by Git, so no separate database
-server or database package is required. Override its location with
-`SQLITE_DATABASE_PATH` if needed. Local uploads are created inside this
-directory and ignored by Git.
+SQLite stores application data in `store.db` inside this directory by default.
+Set `DATABASE_URL` to a PostgreSQL connection URL to use PostgreSQL instead;
+the backend loads local values from `.env`, the workspace `.env`, or the
+git-ignored `.env.aws` file. PostgreSQL schema creation and product seeding run
+on startup. Keep database credentials out of tracked files and use a VPC or
+security-group rule that allows the backend host to reach the database. Override
+the SQLite file location with `SQLITE_DATABASE_PATH` when using the local
+fallback. Local uploads are created inside this directory and ignored by Git.
 
 ## Product images in S3
 
