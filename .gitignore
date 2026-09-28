@@ -1,5 +1,6 @@
 .venv/
 venv/
+.env
 .env.aws
 __pycache__/
 *.py[cod]

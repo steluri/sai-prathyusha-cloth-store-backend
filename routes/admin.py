@@ -36,11 +36,16 @@ def create_admin_blueprint(services):
         except ValueError:
             return jsonify({"error": "Price must be a valid number."}), 400
 
-        image_paths = {}
-        for slot in services.IMAGE_SLOTS:
-            file = request.files.get(slot)
-            if not file or not file.filename:
-                return jsonify({"error": f"The '{slot}' image is required."}), 400
+        primary_file = request.files.get("front")
+        if not primary_file or not primary_file.filename:
+            return jsonify({"error": "The primary product image is required."}), 400
+        additional_files = [file for file in request.files.getlist("additional_images") if file and file.filename]
+        if len(additional_files) > len(services.IMAGE_SLOTS) - 1:
+            return jsonify({"error": f"A maximum of {len(services.IMAGE_SLOTS)} product images is allowed."}), 400
+
+        image_paths = {slot: None for slot in services.IMAGE_SLOTS}
+        files_by_slot = [("front", primary_file)] + list(zip(services.IMAGE_SLOTS[1:], additional_files))
+        for slot, file in files_by_slot:
             saved, error = services.save_image(file, slot)
             if error:
                 return jsonify({"error": error}), 400
@@ -90,19 +95,27 @@ def create_admin_blueprint(services):
             except ValueError:
                 return jsonify({"error": "Price must be a valid number."}), 400
 
-            image_paths = {}
-            for slot in services.IMAGE_SLOTS:
-                file = request.files.get(slot)
-                if file and file.filename:
-                    saved, error = services.save_image(file, slot)
-                    if error:
-                        return jsonify({"error": error}), 400
-                    old_path = existing[f"image_{slot}"]
-                    if old_path:
-                        services.delete_uploaded_file(old_path)
-                    image_paths[slot] = saved
-                else:
-                    image_paths[slot] = existing[f"image_{slot}"]
+            image_paths = {slot: existing[f"image_{slot}"] for slot in services.IMAGE_SLOTS}
+            if not image_paths["front"]:
+                image_paths["front"] = existing["image"]
+            primary_file = request.files.get("front")
+            additional_files = [file for file in request.files.getlist("additional_images") if file and file.filename]
+            available_slots = [slot for slot in services.IMAGE_SLOTS[1:] if not image_paths[slot]]
+            if len(additional_files) > len(available_slots):
+                return jsonify({"error": f"Only {len(available_slots)} optional image slots are available for this product."}), 400
+
+            files_by_slot = []
+            if primary_file and primary_file.filename:
+                files_by_slot.append(("front", primary_file))
+            files_by_slot.extend(zip(available_slots, additional_files))
+            for slot, file in files_by_slot:
+                saved, error = services.save_image(file, slot)
+                if error:
+                    return jsonify({"error": error}), 400
+                old_path = image_paths[slot]
+                image_paths[slot] = saved
+                if old_path:
+                    services.delete_uploaded_file(old_path)
 
             cur.execute(
                 """UPDATE products SET name = ?, category = ?, price = ?, old_price = ?, image = ?, badge = ?,
