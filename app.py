@@ -17,7 +17,7 @@ from flask_cors import CORS
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from storage import StorageError, build_storage
 from werkzeug.security import generate_password_hash
-from database import BASE_DIR, IS_POSTGRES, get_connection as db
+from database import BASE_DIR, DISABLE_DATABASE, DatabaseDisabledError, IS_POSTGRES, get_connection as db
 from routes.admin import create_admin_blueprint
 from routes.catalog import create_catalog_blueprint
 from routes.orders import create_orders_blueprint
@@ -210,6 +210,11 @@ def storage_error(error):
     return jsonify({"error": str(error)}), 502
 
 
+@app.errorhandler(DatabaseDisabledError)
+def database_disabled(error):
+    return jsonify({"error": str(error)}), 503
+
+
 services = SimpleNamespace(
     ADMIN_PASSWORD_HASH=ADMIN_PASSWORD_HASH,
     ADMIN_USERNAME=ADMIN_USERNAME,
@@ -223,6 +228,7 @@ services = SimpleNamespace(
     SES_FROM_EMAIL=SES_FROM_EMAIL,
     RAZORPAY_KEY_ID=RAZORPAY_KEY_ID,
     RAZORPAY_KEY_SECRET=RAZORPAY_KEY_SECRET,
+    DATABASE_DISABLED=DISABLE_DATABASE,
     IS_POSTGRES=IS_POSTGRES,
     SMS_BACKEND=SMS_BACKEND,
     BadSignature=BadSignature,
@@ -252,7 +258,10 @@ app.register_blueprint(create_admin_blueprint(services))
 app.register_blueprint(create_orders_blueprint(services))
 
 
-initialize_schema()
+if DISABLE_DATABASE:
+    app.logger.warning("Database access is disabled; database-backed routes will return 503.")
+else:
+    initialize_schema()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001, debug=True)

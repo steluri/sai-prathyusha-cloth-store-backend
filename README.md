@@ -19,7 +19,11 @@ git-ignored `.env.aws` file. PostgreSQL schema creation and product seeding run
 on startup. Keep database credentials out of tracked files and use a VPC or
 security-group rule that allows the backend host to reach the database. Override
 the SQLite file location with `SQLITE_DATABASE_PATH` when using the local
-fallback. Local uploads are created inside this directory and ignored by Git.
+fallback. Set `DISABLE_DATABASE=true` to start the API without connecting to a
+database or initializing its schema. Health, OTP, and other non-database routes
+remain available; catalog, wishlist, checkout, and database-backed admin routes
+return HTTP 503 while the flag is enabled. Local uploads are created inside this
+directory and ignored by Git.
 
 ## Product images in S3
 
@@ -41,6 +45,18 @@ Flask setup and shared services live in `app.py`. PostgreSQL connection setup
 is in `database.py`; table creation and initial product seeding are in
 `schema.py`. HTTP handlers are grouped as blueprints under `routes/`: OTP,
 catalog and wishlist, admin products, checkout and orders, and system/uploads.
+
+## Direct UPI QR orders
+
+Customers can scan the checkout QR for `telurisrikanth@ybl` and enter the
+12-digit UPI transaction reference (UTR). This creates an order in
+`pending_verification` with the server-calculated amount, item details,
+customer, address, and UTR. Submitting a UTR is **not proof of payment**.
+In Admin > Orders, compare the UTR and amount against the actual credit in
+the merchant's bank or UPI app before choosing **Confirm payment**. Only then
+can the order move to processing and shipping; **Reject claim** cancels an
+unverified order. A UTR can be submitted only once. Razorpay orders continue
+to use their own automatic captured-payment verification.
 
 ## Razorpay checkout
 

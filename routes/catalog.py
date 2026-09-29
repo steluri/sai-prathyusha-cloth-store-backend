@@ -1,13 +1,49 @@
 from flask import Blueprint, jsonify, request
+from schema import PRODUCTS
 
 
 def create_catalog_blueprint(services):
     blueprint = Blueprint("catalog", __name__)
+    sample_products = [
+        {
+            "id": product_id,
+            "name": name,
+            "category": category,
+            "price": price,
+            "old_price": old_price,
+            "image": image,
+            "badge": badge,
+            "color": color,
+            "description": description,
+            "image_front": image_front,
+            "image_back": None,
+            "image_side": None,
+            "image_closeup": None,
+            "image_model": None,
+            "image_fit": None,
+        }
+        for product_id, (name, category, price, old_price, image, badge, color, description, image_front)
+        in enumerate(PRODUCTS, start=1)
+    ]
+    sample_products_by_id = {product["id"]: product for product in sample_products}
+    sample_wishlist = set()
 
     @blueprint.get("/api/products")
     def products():
         category = request.args.get("category")
         search = request.args.get("search", "").strip()
+        if services.DATABASE_DISABLED:
+            results = sample_products
+            if category and category != "All":
+                results = [product for product in results if product["category"] == category]
+            if search:
+                search_term = search.casefold()
+                results = [
+                    product for product in results
+                    if search_term in " ".join((product["name"], product["description"], product["color"])).casefold()
+                ]
+            return jsonify(results)
+
         query = "SELECT * FROM products WHERE 1=1"
         params = []
 
@@ -30,6 +66,9 @@ def create_catalog_blueprint(services):
 
     @blueprint.get("/api/wishlist")
     def get_wishlist():
+        if services.DATABASE_DISABLED:
+            return jsonify([product for product in sample_products if product["id"] in sample_wishlist])
+
         conn = services.db()
         cur = conn.cursor()
         try:
@@ -41,6 +80,12 @@ def create_catalog_blueprint(services):
 
     @blueprint.post("/api/wishlist/<int:product_id>")
     def add_wishlist(product_id):
+        if services.DATABASE_DISABLED:
+            if product_id not in sample_products_by_id:
+                return jsonify({"error": "Product not found"}), 404
+            sample_wishlist.add(product_id)
+            return jsonify({"product_id": product_id, "saved": True}), 201
+
         conn = services.db()
         cur = conn.cursor()
         try:
@@ -56,6 +101,10 @@ def create_catalog_blueprint(services):
 
     @blueprint.delete("/api/wishlist/<int:product_id>")
     def remove_wishlist(product_id):
+        if services.DATABASE_DISABLED:
+            sample_wishlist.discard(product_id)
+            return "", 204
+
         conn = services.db()
         cur = conn.cursor()
         try:

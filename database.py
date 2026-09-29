@@ -12,6 +12,11 @@ load_dotenv(BASE_DIR / ".env.aws")
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 IS_POSTGRES = DATABASE_URL.startswith(("postgres://", "postgresql://"))
+DISABLE_DATABASE = os.environ.get("DISABLE_DATABASE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+class DatabaseDisabledError(RuntimeError):
+    pass
 
 DATABASE_PATH = Path(os.environ.get("SQLITE_DATABASE_PATH", BASE_DIR / "store.db")).expanduser()
 if not DATABASE_PATH.is_absolute():
@@ -19,6 +24,9 @@ if not DATABASE_PATH.is_absolute():
 
 
 def get_connection():
+    if DISABLE_DATABASE:
+        raise DatabaseDisabledError("Database access is disabled by DISABLE_DATABASE.")
+
     if DATABASE_URL:
         if not IS_POSTGRES:
             raise RuntimeError("DATABASE_URL must use the postgres:// or postgresql:// scheme.")

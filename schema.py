@@ -57,7 +57,8 @@ def initialize_schema():
                 created_at TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'confirmed',
                 razorpay_order_id TEXT,
-                razorpay_payment_id TEXT
+                razorpay_payment_id TEXT,
+                upi_utr TEXT
             );
         """ % id_type)
         if IS_POSTGRES:
@@ -71,10 +72,12 @@ def initialize_schema():
             ("status", "TEXT NOT NULL DEFAULT 'confirmed'"),
             ("razorpay_order_id", "TEXT"),
             ("razorpay_payment_id", "TEXT"),
+            ("upi_utr", "TEXT"),
         ):
             if name not in order_columns:
                 cursor.execute(f"ALTER TABLE orders ADD COLUMN {name} {declaration}")
         cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS orders_razorpay_payment_id_idx ON orders(razorpay_payment_id) WHERE razorpay_payment_id IS NOT NULL;")
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS orders_upi_utr_idx ON orders(upi_utr) WHERE upi_utr IS NOT NULL;")
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS payment_sessions (

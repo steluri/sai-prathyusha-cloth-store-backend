@@ -1,14 +1,65 @@
 import hashlib
 import hmac
 import json
+import re
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
+from psycopg2 import IntegrityError as PostgresIntegrityError
 
 
 def create_orders_blueprint(services):
     blueprint = Blueprint("orders", __name__)
+
+    @blueprint.post("/api/orders/upi")
+    def submit_upi_order():
+        data = request.get_json(silent=True) or {}
+        customer = str(data.get("customer", "")).strip()
+        email = services.normalize_email(data.get("email"))
+        address = services.normalize_address(data.get("address"))
+        utr = str(data.get("utr", "")).strip()
+        raw_items = data.get("items")
+        if not customer or not email or not address or not isinstance(raw_items, list) or not raw_items:
+            return jsonify({"error": "Enter a valid name, email, delivery address, and cart."}), 400
+        if not re.fullmatch(r"[0-9]{12}", utr):
+            return jsonify({"error": "Enter the 12-digit UPI transaction reference (UTR)."}), 400
+        try:
+            items = [{"product_id": int(item["product_id"]), "quantity": int(item["quantity"])} for item in raw_items]
+        except (KeyError, TypeError, ValueError):
+            return jsonify({"error": "The cart contains invalid items."}), 400
+        if any(item["quantity"] < 1 or item["quantity"] > 20 for item in items):
+            return jsonify({"error": "Item quantity must be between 1 and 20."}), 400
+
+        conn = services.db()
+        cur = conn.cursor()
+        try:
+            ids = list({item["product_id"] for item in items})
+            cur.execute(f"SELECT id, name, price FROM products WHERE id IN ({','.join(['?'] * len(ids))})", ids)
+            products = {row["id"]: row for row in cur.fetchall()}
+            if len(products) != len(ids):
+                return jsonify({"error": "One or more products are unavailable."}), 400
+            order_items = [{"product_id": item["product_id"], "name": products[item["product_id"]]["name"],
+                            "price": products[item["product_id"]]["price"], "quantity": item["quantity"]} for item in items]
+            total = sum(item["price"] * item["quantity"] for item in order_items)
+            if type(data.get("expected_total")) is not int or data["expected_total"] != total:
+                return jsonify({"error": "The cart price has changed. Refresh your cart and contact the merchant if you already paid."}), 409
+            try:
+                cur.execute(
+                    """INSERT INTO orders (customer, email, address, total, items, created_at, status, upi_utr)
+                       VALUES (?, ?, ?, ?, ?, ?, 'pending_verification', ?) RETURNING id""",
+                    (customer, email, address, total, json.dumps(order_items), datetime.now(timezone.utc).isoformat(), utr),
+                )
+                order_id = cur.fetchone()["id"]
+                conn.commit()
+            except (sqlite3.IntegrityError, PostgresIntegrityError):
+                conn.rollback()
+                return jsonify({"error": "This UTR has already been submitted. Contact the merchant if you need help."}), 409
+            return jsonify({"order_id": order_id, "total": total, "status": "pending_verification"}), 201
+        finally:
+            cur.close()
+            conn.close()
 
     @blueprint.post("/api/payments/razorpay/order")
     def create_razorpay_order():
@@ -149,7 +200,7 @@ def create_orders_blueprint(services):
         conn = services.db()
         cur = conn.cursor()
         try:
-            cur.execute("SELECT id, customer, email, mobile, address, total, items, created_at, status FROM orders ORDER BY id DESC")
+            cur.execute("SELECT id, customer, email, mobile, address, total, items, created_at, status, upi_utr FROM orders ORDER BY id DESC")
             orders = [dict(row) for row in cur.fetchall()]
             for order in orders:
                 order["items"] = json.loads(order["items"])
@@ -170,11 +221,17 @@ def create_orders_blueprint(services):
         try:
             cur.execute("BEGIN IMMEDIATE")
             lock_clause = " FOR UPDATE" if services.IS_POSTGRES else ""
-            cur.execute("SELECT id, mobile, status FROM orders WHERE id = ?" + lock_clause, (order_id,))
+            cur.execute("SELECT id, mobile, status, upi_utr FROM orders WHERE id = ?" + lock_clause, (order_id,))
             order = cur.fetchone()
             if not order:
                 conn.rollback()
                 return jsonify({"error": "Order not found."}), 404
+            if order["status"] == "pending_verification" and status not in {"confirmed", "cancelled"}:
+                conn.rollback()
+                return jsonify({"error": "Verify the UPI payment before starting delivery."}), 409
+            if order["upi_utr"] and order["status"] == "cancelled" and status != "cancelled":
+                conn.rollback()
+                return jsonify({"error": "A rejected UPI order cannot be confirmed."}), 409
             changed = order["status"] != status
             if changed:
                 cur.execute("UPDATE orders SET status = ? WHERE id = ?", (status, order_id))
