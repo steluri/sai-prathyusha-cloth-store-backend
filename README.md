@@ -9,7 +9,13 @@ pip install -r requirements.txt
 Copy-Item .env.example .env
 python app.py
 ```
-
+```Mac local running
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python app.py
+```
 The API runs at `http://localhost:5001`. Configure allowed frontend origins with the comma-separated `CORS_ORIGINS` value in `.env`.
 
 SQLite stores application data in `store.db` inside this directory by default.

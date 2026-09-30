@@ -1,5 +1,17 @@
+import json
+
 from flask import Blueprint, jsonify, request
-from schema import PRODUCTS
+from schema import PRODUCTS, PRODUCT_OPTIONAL_IMAGES
+
+
+def product_data(row):
+    product = dict(row)
+    try:
+        sizes = json.loads(product.get("sizes") or "[]")
+    except (TypeError, ValueError):
+        sizes = []
+    product["sizes"] = sizes if isinstance(sizes, list) else []
+    return product
 
 
 def create_catalog_blueprint(services):
@@ -9,6 +21,8 @@ def create_catalog_blueprint(services):
             "id": product_id,
             "name": name,
             "category": category,
+            "item_type": None,
+            "sizes": [],
             "price": price,
             "old_price": old_price,
             "image": image,
@@ -16,11 +30,7 @@ def create_catalog_blueprint(services):
             "color": color,
             "description": description,
             "image_front": image_front,
-            "image_back": None,
-            "image_side": None,
-            "image_closeup": None,
-            "image_model": None,
-            "image_fit": None,
+            **PRODUCT_OPTIONAL_IMAGES[product_id],
         }
         for product_id, (name, category, price, old_price, image, badge, color, description, image_front)
         in enumerate(PRODUCTS, start=1)
@@ -59,7 +69,7 @@ def create_catalog_blueprint(services):
         cur = conn.cursor()
         try:
             cur.execute(query, params)
-            return jsonify([dict(row) for row in cur.fetchall()])
+            return jsonify([product_data(row) for row in cur.fetchall()])
         finally:
             cur.close()
             conn.close()
@@ -73,7 +83,7 @@ def create_catalog_blueprint(services):
         cur = conn.cursor()
         try:
             cur.execute("SELECT p.* FROM products p JOIN wishlist w ON p.id = w.product_id ORDER BY p.id")
-            return jsonify([dict(row) for row in cur.fetchall()])
+            return jsonify([product_data(row) for row in cur.fetchall()])
         finally:
             cur.close()
             conn.close()

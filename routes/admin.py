@@ -1,6 +1,27 @@
+import json
+
 from flask import Blueprint, jsonify, request
 from werkzeug.security import check_password_hash
 from storage import key_from_upload_path
+
+PRODUCT_ITEM_TYPES = {
+    "Men": {"Shirts", "Jeans", "Trousers", "T-shirts", "Kurtas", "Dhotis", "Inners"},
+    "Women": {"Sarees", "Lehengas", "Kurtis", "Dresses", "Tops", "Jeans", "Chudidars", "Inners"},
+    "Boy-Kid": {"Shirts", "Jeans", "Trousers", "T-shirts", "Kurtas", "Dhotis", "Inners"},
+    "Girl-Kid": {"Sarees", "Lehengas", "Kurtis", "Dresses", "Tops", "Jeans", "Chudidars", "Inners"},
+}
+ADULT_SIZES = {"XS", "S", "M", "L", "XL", "XXL", "Free Size"}
+KID_SIZES = {"1-2Y", "2-3Y", "3-4Y", "4-5Y", "5-6Y", "6-7Y", "7-8Y", "8-9Y", "9-10Y", "10-11Y", "11-12Y", "12-13Y", "13-14Y"}
+INCH_SIZES = {f"{size} in" for size in range(20, 41)}
+LOWER_BODY_TYPES = {"Jeans", "Trousers", "Dhotis", "Chudidars"}
+
+
+def size_options_for(category, item_type):
+    if category in {"Boy-Kid", "Girl-Kid"}:
+        return KID_SIZES
+    if item_type in LOWER_BODY_TYPES:
+        return INCH_SIZES
+    return ADULT_SIZES
 
 
 def _is_product_image_path(path):
@@ -65,13 +86,18 @@ def create_admin_blueprint(services):
     @services.require_admin
     def admin_create_product():
         form = request.form
-        name, category, color, description = (
+        name, category, item_type, color, description = (
             form.get("name", "").strip(), form.get("category", "").strip(),
+            form.get("item_type", "").strip(),
             form.get("color", "").strip(), form.get("description", "").strip(),
         )
+        sizes = list(dict.fromkeys(form.getlist("sizes")))
         badge = form.get("badge", "").strip() or None
-        if not name or category not in ("Women", "Men") or not color or not description:
-            return jsonify({"error": "Name, category, color, and description are required."}), 400
+        if not name or category not in PRODUCT_ITEM_TYPES or item_type not in PRODUCT_ITEM_TYPES.get(category, set()) or not color or not description:
+            return jsonify({"error": "Name, a valid category and item type, color, and description are required."}), 400
+        if not sizes or any(size not in size_options_for(category, item_type) for size in sizes):
+            return jsonify({"error": "Select one or more valid sizes for this category."}), 400
+        sizes_json = json.dumps(sizes)
         try:
             price = int(form.get("price", ""))
             old_price = int(form["old_price"]) if form.get("old_price") else None
@@ -110,17 +136,19 @@ def create_admin_blueprint(services):
         cur = conn.cursor()
         try:
             cur.execute(
-                """INSERT INTO products (name, category, price, old_price, image, badge, color, description,
+                     """INSERT INTO products (name, category, item_type, sizes, price, old_price, image, badge, color, description,
                     image_front, image_back, image_side, image_closeup, image_model, image_fit)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    RETURNING *""",
-                (name, category, price, old_price, image_paths["front"], badge, color, description,
+                     (name, category, item_type, sizes_json, price, old_price, image_paths["front"], badge, color, description,
                  image_paths["front"], image_paths["back"], image_paths["side"],
                  image_paths["closeup"], image_paths["model"], image_paths["fit"]),
             )
             row = cur.fetchone()
             conn.commit()
-            return jsonify(dict(row)), 201
+            saved_product = dict(row)
+            saved_product["sizes"] = sizes
+            return jsonify(saved_product), 201
         finally:
             cur.close()
             conn.close()
@@ -137,13 +165,18 @@ def create_admin_blueprint(services):
                 return jsonify({"error": "Product not found"}), 404
 
             form = request.form
-            name, category, color, description = (
+            name, category, item_type, color, description = (
                 form.get("name", "").strip(), form.get("category", "").strip(),
+                form.get("item_type", "").strip(),
                 form.get("color", "").strip(), form.get("description", "").strip(),
             )
+            sizes = list(dict.fromkeys(form.getlist("sizes")))
             badge = form.get("badge", "").strip() or None
-            if not name or category not in ("Women", "Men") or not color or not description:
-                return jsonify({"error": "Name, category, color, and description are required."}), 400
+            if not name or category not in PRODUCT_ITEM_TYPES or item_type not in PRODUCT_ITEM_TYPES.get(category, set()) or not color or not description:
+                return jsonify({"error": "Name, a valid category and item type, color, and description are required."}), 400
+            if not sizes or any(size not in size_options_for(category, item_type) for size in sizes):
+                return jsonify({"error": "Select one or more valid sizes for this category."}), 400
+            sizes_json = json.dumps(sizes)
             try:
                 price = int(form.get("price", ""))
                 old_price = int(form["old_price"]) if form.get("old_price") else None
@@ -191,17 +224,19 @@ def create_admin_blueprint(services):
                     services.delete_uploaded_file(old_path)
 
             cur.execute(
-                """UPDATE products SET name = ?, category = ?, price = ?, old_price = ?, image = ?, badge = ?,
+                """UPDATE products SET name = ?, category = ?, item_type = ?, sizes = ?, price = ?, old_price = ?, image = ?, badge = ?,
                     color = ?, description = ?, image_front = ?, image_back = ?, image_side = ?,
                     image_closeup = ?, image_model = ?, image_fit = ? WHERE id = ?
                     RETURNING *""",
-                (name, category, price, old_price, image_paths["front"], badge, color, description,
+                (name, category, item_type, sizes_json, price, old_price, image_paths["front"], badge, color, description,
                  image_paths["front"], image_paths["back"], image_paths["side"],
                  image_paths["closeup"], image_paths["model"], image_paths["fit"], product_id),
             )
             row = cur.fetchone()
             conn.commit()
-            return jsonify(dict(row))
+            saved_product = dict(row)
+            saved_product["sizes"] = sizes
+            return jsonify(saved_product)
         finally:
             cur.close()
             conn.close()

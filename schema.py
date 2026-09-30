@@ -12,6 +12,19 @@ PRODUCTS = [
     ("Drape Studio Blazer", "Women", 4499, None, "https://images.unsplash.com/photo-1591369822096-ffd140ec948f?auto=format&fit=crop&w=900&q=85", "Limited", "Camel", "Relaxed tailoring with a soft shoulder and modern proportions.", "https://images.unsplash.com/photo-1591369822096-ffd140ec948f?auto=format&fit=crop&w=900&q=85"),
 ]
 
+OPTIONAL_IMAGE_URLS = [
+    "https://images.unsplash.com/photo-1529139574466-a303027c1d8b?auto=format&fit=crop&w=1200&q=85",
+    "https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=1200&q=85",
+    "https://images.unsplash.com/photo-1490481651871-ab68de25d43d?auto=format&fit=crop&w=1200&q=85",
+    "https://images.unsplash.com/photo-1539109136881-3be0616acf4b?auto=format&fit=crop&w=1200&q=85",
+    "https://images.unsplash.com/photo-1506629082955-511b1aa562c8?auto=format&fit=crop&w=1200&q=85",
+]
+OPTIONAL_IMAGE_FIELDS = ("image_back", "image_side", "image_closeup", "image_model", "image_fit")
+PRODUCT_OPTIONAL_IMAGES = {
+    product_id: dict(zip(OPTIONAL_IMAGE_FIELDS, OPTIONAL_IMAGE_URLS[offset:] + OPTIONAL_IMAGE_URLS[:offset]))
+    for product_id, offset in ((product_id, (product_id - 1) % len(OPTIONAL_IMAGE_URLS)) for product_id in range(1, len(PRODUCTS) + 1))
+}
+
 
 def initialize_schema():
     connection = get_connection()
@@ -24,6 +37,8 @@ def initialize_schema():
                 id %s,
                 name TEXT NOT NULL,
                 category TEXT NOT NULL,
+                item_type TEXT,
+                sizes TEXT,
                 price INTEGER NOT NULL,
                 old_price INTEGER,
                 image TEXT NOT NULL,
@@ -38,6 +53,15 @@ def initialize_schema():
                 image_fit TEXT
             );
         """ % id_type)
+
+        if IS_POSTGRES:
+            cursor.execute("SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'products'")
+        else:
+            cursor.execute("PRAGMA table_info(products)")
+        product_columns = {row["name"] for row in cursor.fetchall()}
+        for name in ("item_type", "sizes"):
+            if name not in product_columns:
+                cursor.execute(f"ALTER TABLE products ADD COLUMN {name} TEXT")
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS wishlist (
@@ -96,12 +120,14 @@ def initialize_schema():
 
         cursor.execute("SELECT COUNT(*) AS product_count FROM products;")
         if cursor.fetchone()["product_count"] == 0:
-            for product in PRODUCTS:
+            for product_id, product in enumerate(PRODUCTS, start=1):
+                optional_images = PRODUCT_OPTIONAL_IMAGES[product_id]
                 cursor.execute("""
                     INSERT INTO products
-                    (name, category, price, old_price, image, badge, color, description, image_front)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, product)
+                    (name, category, price, old_price, image, badge, color, description, image_front,
+                     image_back, image_side, image_closeup, image_model, image_fit)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (*product, *(optional_images[field] for field in OPTIONAL_IMAGE_FIELDS)))
             cursor.execute("UPDATE products SET image_front = image WHERE image_front IS NULL;")
             connection.commit()
     finally:
