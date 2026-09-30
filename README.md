@@ -18,8 +18,19 @@ python app.py
 ```
 The API runs at `http://localhost:5001`. Configure allowed frontend origins with the comma-separated `CORS_ORIGINS` value in `.env`.
 
+For local login testing with SQLite, create or reset the dummy customer:
+
+```powershell
+python seed_dummy_user.py
+```
+
+Use email `demo@pandu.local` and password `PanduTest123`. The command refuses
+to seed PostgreSQL unless `ALLOW_DUMMY_USER_SEED=true` is explicitly set in a
+test environment.
+
 SQLite stores application data in `store.db` inside this directory by default.
 Set `DATABASE_URL` to a PostgreSQL connection URL to use PostgreSQL instead;
+set `USE_SQLITE=true` to use local SQLite while keeping a saved remote URL.
 the backend loads local values from `.env`, the workspace `.env`, or the
 git-ignored `.env.aws` file. PostgreSQL schema creation and product seeding run
 on startup. Keep database credentials out of tracked files and use a VPC or

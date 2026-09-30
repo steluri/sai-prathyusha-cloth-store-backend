@@ -7,7 +7,12 @@ import uuid
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
-from psycopg2 import IntegrityError as PostgresIntegrityError
+
+try:
+    from psycopg2 import IntegrityError as PostgresIntegrityError
+except ImportError:
+    class PostgresIntegrityError(Exception):
+        pass
 
 
 def create_orders_blueprint(services):
@@ -16,6 +21,7 @@ def create_orders_blueprint(services):
     @blueprint.post("/api/orders/upi")
     def submit_upi_order():
         data = request.get_json(silent=True) or {}
+        user_id = services.current_customer_id() if hasattr(services, "current_customer_id") else None
         customer = str(data.get("customer", "")).strip()
         email = services.normalize_email(data.get("email"))
         address = services.normalize_address(data.get("address"))
@@ -47,9 +53,9 @@ def create_orders_blueprint(services):
                 return jsonify({"error": "The cart price has changed. Refresh your cart and contact the merchant if you already paid."}), 409
             try:
                 cur.execute(
-                    """INSERT INTO orders (customer, email, address, total, items, created_at, status, upi_utr)
-                       VALUES (?, ?, ?, ?, ?, ?, 'pending_verification', ?) RETURNING id""",
-                    (customer, email, address, total, json.dumps(order_items), datetime.now(timezone.utc).isoformat(), utr),
+                          """INSERT INTO orders (user_id, customer, email, address, total, items, created_at, status, upi_utr)
+                              VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_verification', ?) RETURNING id""",
+                          (user_id, customer, email, address, total, json.dumps(order_items), datetime.now(timezone.utc).isoformat(), utr),
                 )
                 order_id = cur.fetchone()["id"]
                 conn.commit()
@@ -64,6 +70,7 @@ def create_orders_blueprint(services):
     @blueprint.post("/api/payments/razorpay/order")
     def create_razorpay_order():
         data = request.get_json(silent=True) or {}
+        user_id = services.current_customer_id() if hasattr(services, "current_customer_id") else None
         customer = str(data.get("customer", "")).strip()
         email = services.normalize_email(data.get("email"))
         address = services.normalize_address(data.get("address"))
@@ -82,13 +89,19 @@ def create_orders_blueprint(services):
         cur = conn.cursor()
         try:
             placeholders = ",".join(["?"] * len(ids))
-            cur.execute(f"SELECT id, price FROM products WHERE id IN ({placeholders})", ids)
+            cur.execute(f"SELECT id, name, price FROM products WHERE id IN ({placeholders})", ids)
             rows = cur.fetchall()
-            prices = {row["id"]: row["price"] for row in rows}
-            if len(prices) != len(set(ids)):
+            products = {row["id"]: row for row in rows}
+            if len(products) != len(set(ids)):
                 return jsonify({"error": "One or more products are unavailable."}), 400
 
-            total = sum(prices[item["product_id"]] * item["quantity"] for item in items)
+            order_items = [{
+                "product_id": item["product_id"],
+                "name": products[item["product_id"]]["name"],
+                "price": products[item["product_id"]]["price"],
+                "quantity": item["quantity"],
+            } for item in items]
+            total = sum(item["price"] * item["quantity"] for item in order_items)
             receipt = f"pandu-{uuid.uuid4().hex[:24]}"
             try:
                 razorpay_order = services.razorpay_request("POST", "/orders", {
@@ -105,9 +118,9 @@ def create_orders_blueprint(services):
 
             cur.execute(
                 """INSERT INTO payment_sessions
-                   (razorpay_order_id, customer, email, mobile, address, amount, items, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (razorpay_order["id"], customer, email, "", address, total, json.dumps(items),
+                         (razorpay_order_id, user_id, customer, email, mobile, address, amount, items, created_at)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (razorpay_order["id"], user_id, customer, email, "", address, total, json.dumps(order_items),
                  datetime.now(timezone.utc).isoformat()),
             )
             conn.commit()
@@ -173,9 +186,9 @@ def create_orders_blueprint(services):
 
             cur.execute(
                 """INSERT INTO orders
-                   (customer, email, mobile, address, total, items, created_at, razorpay_order_id, razorpay_payment_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
-                (payment_session["customer"], payment_session["email"], payment_session["mobile"],
+                         (user_id, customer, email, mobile, address, total, items, created_at, razorpay_order_id, razorpay_payment_id)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
+                     (payment_session["user_id"], payment_session["customer"], payment_session["email"], payment_session["mobile"],
                  payment_session["address"], payment_session["amount"],
                  payment_session["items"] if isinstance(payment_session["items"], str) else json.dumps(payment_session["items"]),
                  datetime.now(timezone.utc).isoformat(), payment_session["razorpay_order_id"], razorpay_payment_id),

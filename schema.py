@@ -33,6 +33,16 @@ def initialize_schema():
     wishlist_id_type = "BIGINT" if IS_POSTGRES else "INTEGER"
     try:
         cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id %s,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+        """ % id_type)
+
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS products (
                 id %s,
                 name TEXT NOT NULL,
@@ -72,6 +82,7 @@ def initialize_schema():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS orders (
                 id %s,
+                user_id %s REFERENCES users(id) ON DELETE SET NULL,
                 customer TEXT NOT NULL,
                 email TEXT,
                 mobile TEXT,
@@ -84,13 +95,14 @@ def initialize_schema():
                 razorpay_payment_id TEXT,
                 upi_utr TEXT
             );
-        """ % id_type)
+        """ % (id_type, wishlist_id_type))
         if IS_POSTGRES:
             cursor.execute("SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'orders'")
         else:
             cursor.execute("PRAGMA table_info(orders)")
         order_columns = {row["name"] for row in cursor.fetchall()}
         for name, declaration in (
+            ("user_id", f"{wishlist_id_type} REFERENCES users(id) ON DELETE SET NULL"),
             ("mobile", "TEXT"),
             ("address", "TEXT"),
             ("status", "TEXT NOT NULL DEFAULT 'confirmed'"),
@@ -102,10 +114,12 @@ def initialize_schema():
                 cursor.execute(f"ALTER TABLE orders ADD COLUMN {name} {declaration}")
         cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS orders_razorpay_payment_id_idx ON orders(razorpay_payment_id) WHERE razorpay_payment_id IS NOT NULL;")
         cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS orders_upi_utr_idx ON orders(upi_utr) WHERE upi_utr IS NOT NULL;")
+        cursor.execute("CREATE INDEX IF NOT EXISTS orders_user_id_idx ON orders(user_id);")
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS payment_sessions (
                 razorpay_order_id TEXT PRIMARY KEY,
+                user_id %s REFERENCES users(id) ON DELETE SET NULL,
                 customer TEXT NOT NULL,
                 email TEXT,
                 mobile TEXT NOT NULL,
@@ -115,7 +129,14 @@ def initialize_schema():
                 completed BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at TEXT NOT NULL
             );
-        """)
+        """ % wishlist_id_type)
+        if IS_POSTGRES:
+            cursor.execute("SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'payment_sessions'")
+        else:
+            cursor.execute("PRAGMA table_info(payment_sessions)")
+        payment_columns = {row["name"] for row in cursor.fetchall()}
+        if "user_id" not in payment_columns:
+            cursor.execute(f"ALTER TABLE payment_sessions ADD COLUMN user_id {wishlist_id_type} REFERENCES users(id) ON DELETE SET NULL")
         connection.commit()
 
         cursor.execute("SELECT COUNT(*) AS product_count FROM products;")

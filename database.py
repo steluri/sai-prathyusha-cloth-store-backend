@@ -10,7 +10,8 @@ load_dotenv(BASE_DIR / ".env")
 load_dotenv(BASE_DIR.parent / ".env")
 load_dotenv(BASE_DIR / ".env.aws")
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+USE_SQLITE = os.environ.get("USE_SQLITE", "").strip().lower() in {"1", "true", "yes", "on"}
+DATABASE_URL = "" if USE_SQLITE else os.environ.get("DATABASE_URL", "").strip()
 IS_POSTGRES = DATABASE_URL.startswith(("postgres://", "postgresql://"))
 DISABLE_DATABASE = os.environ.get("DISABLE_DATABASE", "").strip().lower() in {"1", "true", "yes", "on"}
 

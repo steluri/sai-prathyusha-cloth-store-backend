@@ -19,6 +19,7 @@ from storage import StorageError, build_storage
 from werkzeug.security import generate_password_hash
 from database import BASE_DIR, DISABLE_DATABASE, DatabaseDisabledError, IS_POSTGRES, get_connection as db
 from routes.admin import create_admin_blueprint
+from routes.auth import create_auth_blueprint
 from routes.catalog import create_catalog_blueprint
 from routes.orders import create_orders_blueprint
 from routes.otp import create_otp_blueprint
@@ -39,6 +40,11 @@ ADMIN_TOKEN_MAX_AGE = int(os.environ.get("ADMIN_TOKEN_MAX_AGE", "43200"))
 token_serializer = URLSafeTimedSerializer(
     os.environ.get("ADMIN_TOKEN_SECRET", "pandu-local-development-secret"),
     salt="admin-auth",
+)
+CUSTOMER_TOKEN_MAX_AGE = int(os.environ.get("CUSTOMER_TOKEN_MAX_AGE", "2592000"))
+customer_token_serializer = URLSafeTimedSerializer(
+    os.environ.get("CUSTOMER_TOKEN_SECRET", os.environ.get("ADMIN_TOKEN_SECRET", "pandu-local-development-secret")),
+    salt="customer-auth",
 )
 
 SMS_BACKEND = os.environ.get("SMS_BACKEND", os.environ.get("OTP_SMS_BACKEND", "console")).strip().lower()
@@ -194,6 +200,15 @@ def require_admin(fn):
     return wrapper
 
 
+def current_customer_id():
+    auth = request.headers.get("Authorization", "")
+    token = auth.split(" ", 1)[1] if auth.startswith("Bearer ") else ""
+    try:
+        return int(customer_token_serializer.loads(token, max_age=CUSTOMER_TOKEN_MAX_AGE)["user_id"])
+    except (BadSignature, SignatureExpired, KeyError, TypeError, ValueError):
+        return None
+
+
 def save_image(file, slot):
     try:
         return storage.save(file, slot), None
@@ -218,6 +233,7 @@ def database_disabled(error):
 services = SimpleNamespace(
     ADMIN_PASSWORD_HASH=ADMIN_PASSWORD_HASH,
     ADMIN_USERNAME=ADMIN_USERNAME,
+    CUSTOMER_TOKEN_MAX_AGE=CUSTOMER_TOKEN_MAX_AGE,
     IMAGE_SLOTS=IMAGE_SLOTS,
     OTP_EXPIRY_SECONDS=OTP_EXPIRY_SECONDS,
     OTP_MAX_ATTEMPTS=OTP_MAX_ATTEMPTS,
@@ -234,6 +250,8 @@ services = SimpleNamespace(
     BadSignature=BadSignature,
     SignatureExpired=SignatureExpired,
     db=db,
+    customer_token_serializer=customer_token_serializer,
+    current_customer_id=current_customer_id,
     delete_uploaded_file=delete_uploaded_file,
     normalize_address=normalize_address,
     normalize_email=normalize_email,
@@ -252,6 +270,7 @@ services = SimpleNamespace(
 )
 
 app.register_blueprint(create_system_blueprint(storage))
+app.register_blueprint(create_auth_blueprint(services))
 app.register_blueprint(create_otp_blueprint(services))
 app.register_blueprint(create_catalog_blueprint(services))
 app.register_blueprint(create_admin_blueprint(services))
