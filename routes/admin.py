@@ -46,6 +46,29 @@ def create_admin_blueprint(services):
     def admin_logout():
         return "", 204
 
+    @blueprint.patch("/api/admin/products/<int:product_id>/best-seller")
+    @services.require_admin
+    def update_best_seller(product_id):
+        best_seller = (request.get_json(silent=True) or {}).get("best_seller")
+        if not isinstance(best_seller, bool):
+            return jsonify({"error": "best_seller must be a boolean."}), 400
+
+        conn = services.db()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "UPDATE products SET best_seller = ? WHERE id = ? RETURNING id, best_seller",
+                (best_seller, product_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return jsonify({"error": "Product not found"}), 404
+            conn.commit()
+            return jsonify({"id": row["id"], "best_seller": bool(row["best_seller"])})
+        finally:
+            cur.close()
+            conn.close()
+
     @blueprint.post("/api/admin/product-images")
     @services.require_admin
     def upload_product_image():

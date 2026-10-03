@@ -93,6 +93,25 @@ class AdminProductTests(unittest.TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json["sizes"], ["20 in", "40 in"])
 
+    def test_best_seller_toggle_updates_public_feed(self):
+        product = self.client.get("/api/products").json[0]
+        self.assertFalse(product["best_seller"])
+
+        updated = self.client.patch(
+            f"/api/admin/products/{product['id']}/best-seller",
+            json={"best_seller": True},
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertTrue(updated.json["best_seller"])
+        self.assertEqual([item["id"] for item in self.client.get("/api/products/best-sellers").json], [product["id"]])
+
+        removed = self.client.patch(
+            f"/api/admin/products/{product['id']}/best-seller",
+            json={"best_seller": False},
+        )
+        self.assertEqual(removed.status_code, 200)
+        self.assertEqual(self.client.get("/api/products/best-sellers").json, [])
+
     def test_create_rejects_item_type_not_available_for_category(self):
         response = self.client.post("/api/admin/products", data={
             "name": "Kids Dhoti",
@@ -155,6 +174,7 @@ class AdminProductTests(unittest.TestCase):
 
         self.assertIn("item_type", columns)
         self.assertIn("sizes", columns)
+        self.assertIn("best_seller", columns)
         self.assertEqual(product["name"], "Legacy Shirt")
         self.assertIsNone(product["item_type"])
 

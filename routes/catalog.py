@@ -11,6 +11,7 @@ def product_data(row):
     except (TypeError, ValueError):
         sizes = []
     product["sizes"] = sizes if isinstance(sizes, list) else []
+    product["best_seller"] = bool(product.get("best_seller"))
     return product
 
 
@@ -30,6 +31,7 @@ def create_catalog_blueprint(services):
             "color": color,
             "description": description,
             "image_front": image_front,
+            "best_seller": badge == "Bestseller",
             **PRODUCT_OPTIONAL_IMAGES[product_id],
         }
         for product_id, (name, category, price, old_price, image, badge, color, description, image_front)
@@ -37,6 +39,20 @@ def create_catalog_blueprint(services):
     ]
     sample_products_by_id = {product["id"]: product for product in sample_products}
     sample_wishlist = set()
+
+    @blueprint.get("/api/products/best-sellers")
+    def best_sellers():
+        if services.DATABASE_DISABLED:
+            return jsonify([product for product in sample_products if product["best_seller"]])
+
+        conn = services.db()
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT * FROM products WHERE best_seller = TRUE ORDER BY id")
+            return jsonify([product_data(row) for row in cur.fetchall()])
+        finally:
+            cur.close()
+            conn.close()
 
     @blueprint.get("/api/products")
     def products():

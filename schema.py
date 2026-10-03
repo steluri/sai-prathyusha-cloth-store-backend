@@ -60,7 +60,8 @@ def initialize_schema():
                 image_side TEXT,
                 image_closeup TEXT,
                 image_model TEXT,
-                image_fit TEXT
+                image_fit TEXT,
+                best_seller BOOLEAN NOT NULL DEFAULT FALSE
             );
         """ % id_type)
 
@@ -69,9 +70,9 @@ def initialize_schema():
         else:
             cursor.execute("PRAGMA table_info(products)")
         product_columns = {row["name"] for row in cursor.fetchall()}
-        for name in ("item_type", "sizes"):
+        for name, declaration in (("item_type", "TEXT"), ("sizes", "TEXT"), ("best_seller", "BOOLEAN NOT NULL DEFAULT FALSE")):
             if name not in product_columns:
-                cursor.execute(f"ALTER TABLE products ADD COLUMN {name} TEXT")
+                cursor.execute(f"ALTER TABLE products ADD COLUMN {name} {declaration}")
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS wishlist (
